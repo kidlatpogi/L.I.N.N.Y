@@ -1,0 +1,12 @@
+customtkinter==5.2.1
+google-generativeai>=0.8.0
+SpeechRecognition>=3.14.0
+pywhatkit==5.4
+pyaudio==0.2.14
+edge-tts>=6.1.9
+pygame>=2.5.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+google-api-python-client>=2.100.0
+python-dateutil>=2.8.2
