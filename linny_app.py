@@ -1,8 +1,9 @@
 """
-L.I.N.N.Y. 2.0 - Loyal Intelligent Neural Network for You
+L.I.N.N.Y. 3.0 - Loyal Intelligent Neural Network for You
 A voice assistant desktop application with GUI dashboard and system automation.
 
-Version 2.0 Features:
+Version 3.0 Features:
+- Cascading Brain Architecture (Groq → Perplexity → Gemini)
 - Edge-TTS Neural Voices (High Quality)
 - Google Calendar API Integration
 - Bilingual Support (English/Tagalog)
@@ -26,6 +27,8 @@ import customtkinter as ctk
 
 # AI
 import google.generativeai as genai
+from groq import Groq
+from openai import OpenAI
 
 # Voice
 import speech_recognition as sr
@@ -54,13 +57,223 @@ SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 
 # Default configuration
 DEFAULT_CONFIG = {
-    "api_key": "",
+    "groq_api_key": "",
+    "perplexity_api_key": "",
+    "gemini_api_key": "",
     "wake_word": "Linny",
     "user_name": "Zeus",
     "fake_lock_enabled": False,
     "microphone_index": None,
     "language": "en-US"  # en-US or fil-PH
 }
+
+
+class BrainManager:
+    """
+    L.I.N.N.Y. 3.0 Cascading Brain Architecture
+    Manages multiple AI models with intelligent routing and fallback logic.
+    
+    Priority:
+    1. Groq (Llama 3.3 70B) - Primary, fast and free
+    2. Perplexity (Sonar) - For search/news/price queries
+    3. Gemini (1.5 Flash) - Backup fallback
+    """
+    
+    def __init__(self, config, log_callback=None):
+        self.config = config
+        self.log_callback = log_callback
+        
+        # Search intent keywords
+        self.search_keywords = [
+            "search", "price", "news", "who won", "latest", 
+            "current", "find", "lookup", "what is", "what's",
+            "hanap", "presyo", "balita"  # Tagalog equivalents
+        ]
+        
+        # Initialize AI clients
+        self.groq_client = None
+        self.perplexity_client = None
+        self.gemini_client = None
+        
+        self._initialize_clients()
+    
+    def log(self, message, is_error=False):
+        """Log message with timestamp"""
+        if self.log_callback:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            prefix = "[ERROR]" if is_error else "[INFO]"
+            self.log_callback(f"{timestamp} {prefix} [Brain] {message}")
+    
+    def _initialize_clients(self):
+        """Initialize all available AI clients"""
+        # Initialize Groq (Primary)
+        groq_key = self.config.get("groq_api_key", "").strip()
+        if groq_key:
+            try:
+                self.groq_client = Groq(api_key=groq_key)
+                self.log("✓ Groq client initialized (Primary)")
+            except Exception as e:
+                self.log(f"Groq initialization failed: {e}", is_error=True)
+        else:
+            self.log("⚠ Groq API key not configured")
+        
+        # Initialize Perplexity (Search)
+        perplexity_key = self.config.get("perplexity_api_key", "").strip()
+        if perplexity_key:
+            try:
+                self.perplexity_client = OpenAI(
+                    api_key=perplexity_key,
+                    base_url="https://api.perplexity.ai"
+                )
+                self.log("✓ Perplexity client initialized (Search)")
+            except Exception as e:
+                self.log(f"Perplexity initialization failed: {e}", is_error=True)
+        else:
+            self.log("⚠ Perplexity API key not configured")
+        
+        # Initialize Gemini (Backup)
+        gemini_key = self.config.get("gemini_api_key", "").strip()
+        if gemini_key:
+            try:
+                genai.configure(api_key=gemini_key)
+                self.gemini_client = genai.GenerativeModel('gemini-1.5-flash')
+                # Test the model
+                test_response = self.gemini_client.generate_content("Hi")
+                self.log("✓ Gemini client initialized (Backup)")
+            except Exception as e:
+                self.log(f"Gemini initialization failed: {e}", is_error=True)
+                self.gemini_client = None
+        else:
+            self.log("⚠ Gemini API key not configured")
+    
+    def _detect_search_intent(self, text):
+        """Detect if the query requires search/news/current information"""
+        text_lower = text.lower()
+        return any(keyword in text_lower for keyword in self.search_keywords)
+    
+    def _try_groq(self, prompt):
+        """Attempt to get response from Groq"""
+        if not self.groq_client:
+            return None
+        
+        try:
+            self.log("→ Trying Groq (Llama 3.3 70B)...")
+            response = self.groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=500
+            )
+            reply = response.choices[0].message.content.strip()
+            self.log(f"✓ Groq responded ({len(reply)} chars)")
+            return reply
+        except Exception as e:
+            self.log(f"✗ Groq failed: {e}", is_error=True)
+            return None
+    
+    def _try_perplexity(self, prompt):
+        """Attempt to get response from Perplexity"""
+        if not self.perplexity_client:
+            return None
+        
+        try:
+            self.log("→ Trying Perplexity (Sonar)...")
+            response = self.perplexity_client.chat.completions.create(
+                model="sonar",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            reply = response.choices[0].message.content.strip()
+            self.log(f"✓ Perplexity responded ({len(reply)} chars)")
+            return reply
+        except Exception as e:
+            self.log(f"✗ Perplexity failed: {e}", is_error=True)
+            return None
+    
+    def _try_gemini(self, prompt):
+        """Attempt to get response from Gemini"""
+        if not self.gemini_client:
+            return None
+        
+        try:
+            self.log("→ Trying Gemini (1.5 Flash)...")
+            response = self.gemini_client.generate_content(prompt)
+            reply = response.text.strip()
+            self.log(f"✓ Gemini responded ({len(reply)} chars)")
+            return reply
+        except exceptions.ResourceExhausted:
+            self.log("✗ Gemini quota exceeded", is_error=True)
+            return None
+        except Exception as e:
+            self.log(f"✗ Gemini failed: {e}", is_error=True)
+            return None
+    
+    def ask_brain(self, text, language="en-US"):
+        """
+        Main entry point for AI queries with cascading logic.
+        
+        Flow:
+        1. If search intent detected → Try Perplexity first
+        2. Else → Try Groq (primary)
+        3. If primary fails → Try Gemini (backup)
+        4. If backup fails → Try Perplexity (final fallback)
+        """
+        user_name = self.config.get("user_name", "Zeus")
+        
+        # Build system prompt
+        if language == 'fil-PH':
+            system_prompt = f"Persona: Linny (Loyal AI). User: {user_name}. Lang: Tagalog. Brief, warm answer."
+        else:
+            system_prompt = f"Persona: Linny (Loyal AI). User: {user_name}. Lang: English. Brief, warm answer."
+        
+        full_prompt = f"{system_prompt}\n\nUser: {text}"
+        
+        # Detect intent
+        is_search_query = self._detect_search_intent(text)
+        
+        if is_search_query:
+            self.log("🔍 Search intent detected")
+            # Try Perplexity first for search queries
+            reply = self._try_perplexity(full_prompt)
+            if reply:
+                return reply
+            
+            # Fallback to Groq
+            self.log("⚠ Perplexity unavailable, falling back to Groq")
+            reply = self._try_groq(full_prompt)
+            if reply:
+                return reply
+            
+            # Final fallback to Gemini
+            self.log("⚠ Groq unavailable, falling back to Gemini")
+            reply = self._try_gemini(full_prompt)
+            if reply:
+                return reply
+        else:
+            # General query: Try Groq first (fast and free)
+            reply = self._try_groq(full_prompt)
+            if reply:
+                return reply
+            
+            # Fallback to Gemini
+            self.log("⚠ Groq unavailable, falling back to Gemini")
+            reply = self._try_gemini(full_prompt)
+            if reply:
+                return reply
+            
+            # Final fallback to Perplexity
+            self.log("⚠ Gemini unavailable, falling back to Perplexity")
+            reply = self._try_perplexity(full_prompt)
+            if reply:
+                return reply
+        
+        # All models failed
+        self.log("✗ All AI models failed", is_error=True)
+        if language == 'fil-PH':
+            return "Sorry, lahat ng AI models ay hindi available ngayon."
+        else:
+            return "Sorry, all AI models are currently unavailable."
+
+
 
 
 class GoogleCalendarManager:
@@ -322,7 +535,6 @@ class LinnyAssistant:
         self.is_speaking = False  # NEW: Prevent self-listening loop
         self.recognizer = sr.Recognizer()
         self.microphone = None
-        self.model = None
         
         # Phonetic aliases for robust wake word detection
         self.phonetic_aliases = [
@@ -356,8 +568,8 @@ class LinnyAssistant:
             log_callback=self.log
         )
         
-        # Initialize Gemini AI
-        self.setup_gemini()
+        # Initialize BrainManager (L.I.N.N.Y. 3.0 Cascading Brain)
+        self.brain_manager = BrainManager(self.config, self.log)
     
     def update_thinking_phrases(self):
         """Update thinking phrases based on language setting"""
@@ -384,50 +596,7 @@ class LinnyAssistant:
                 f"Hold on, {self.config.get('user_name', 'Zeus')}..."
             ]
     
-    def setup_gemini(self):
-        """Configure Gemini AI with stable model selection"""
-        api_key = self.config.get("api_key", "").strip()
-        
-        if not api_key:
-            self.model = None
-            self.log("No API key configured")
-            return
-        
-        try:
-            genai.configure(api_key=api_key)
-            
-            # Try stable models in order of preference (avoid experimental models)
-            stable_models = [
-                'gemini-1.5-flash',
-                'gemini-1.5-pro', 
-                'gemini-pro'
-            ]
-            
-            for model_name in stable_models:
-                try:
-                    self.log(f"Attempting to initialize: {model_name}")
-                    self.model = genai.GenerativeModel(model_name)
-                    
-                    # Test the model
-                    test_response = self.model.generate_content("Hi")
-                    self.log(f"✓ Successfully initialized: {model_name}")
-                    return  # Success, exit the loop
-                    
-                except exceptions.ResourceExhausted:
-                    self.log(f"⚠ {model_name} quota exceeded, trying next model...", is_error=True)
-                    continue
-                    
-                except Exception as e:
-                    self.log(f"✗ Failed to initialize {model_name}: {e}")
-                    continue
-            
-            # If all models failed
-            self.model = None
-            self.log("No compatible Gemini models available", is_error=True)
-            
-        except Exception as e:
-            self.log(f"Gemini setup error: {e}", is_error=True)
-            self.model = None
+
     
     def log(self, message, is_error=False):
         """Log message with timestamp"""
@@ -701,58 +870,37 @@ class LinnyAssistant:
             self.speak(response)
             return
         
-        # AI Fallback
-        if self.model:
-            try:
-                import random
-                
-                # Immediate feedback
-                thinking_phrase = random.choice(self.thinking_phrases)
-                self.speak(thinking_phrase)
-                self.log(f"Thinking phrase: {thinking_phrase}")
-                
-                user_name = self.config.get("user_name", "Zeus")
-                
-                # Compressed System Prompt (Token Optimization)
-                if language == 'fil-PH':
-                    system_prompt = f"Persona: Linny (Loyal AI). User: {user_name}. Lang: Tagalog. Brief, warm answer."
-                else:
-                    system_prompt = f"Persona: Linny (Loyal AI). User: {user_name}. Lang: English. Brief, warm answer."
-                
-                self.log("Sending query to Gemini AI...")
-                
-                # Smart Quota Handling
-                try:
-                    response = self.model.generate_content(f"{system_prompt}\n\nUser: {command}")
-                    reply = response.text.strip()
-                    self.log(f"AI Response: {reply}")
-                    self.speak(reply)
-                    
-                except exceptions.ResourceExhausted:
-                    # The "Tired" Logic
-                    self.log("⚠ Quota Exceeded (429). Cooling down.", is_error=True)
-                    if language == 'fil-PH':
-                        self.speak("Pagod na ang utak ko. Magpahinga muna tayo sandali.")
-                    else:
-                        self.speak("My energy is low. Please wait a minute before asking again.")
-                        
-                except Exception as e:
-                    raise e  # Re-raise other errors to outer except block
-                
-            except Exception as e:
-                error_msg = str(e)
-                self.log(f"AI error: {error_msg}", is_error=True)
-                
-                if language == 'fil-PH':
-                    self.speak("Sorry, may problema ako sa pag-isip")
-                else:
-                    self.speak("Sorry, I encountered an error")
-        else:
-            self.log("No AI model available", is_error=True)
-            if language == 'fil-PH':
-                self.speak("Walang AI brain. I-check mo ang API key sa settings.")
+        # AI Fallback (L.I.N.N.Y. 3.0 Cascading Brain)
+        try:
+            import random
+            
+            # Immediate feedback
+            thinking_phrase = random.choice(self.thinking_phrases)
+            self.speak(thinking_phrase)
+            self.log(f"Thinking phrase: {thinking_phrase}")
+            
+            # Use BrainManager for cascading AI logic
+            self.log("Querying Cascading Brain...")
+            reply = self.brain_manager.ask_brain(command, language)
+            
+            if reply:
+                self.speak(reply)
             else:
-                self.speak("Error: System Overload")
+                # All models failed
+                if language == 'fil-PH':
+                    self.speak("Sorry, walang available na AI models ngayon.")
+                else:
+                    self.speak("Sorry, no AI models are currently available.")
+                    
+        except Exception as e:
+            error_msg = str(e)
+            self.log(f"AI error: {error_msg}", is_error=True)
+            
+            if language == 'fil-PH':
+                self.speak("Sorry, may problema ako sa pag-isip")
+            else:
+                self.speak("Sorry, I encountered an error")
+
     
     def start_listening(self):
         """Start continuous listening loop for wake word"""
@@ -848,7 +996,7 @@ class LinnyGUI:
         # Title
         title = ctk.CTkLabel(
             self.root,
-            text="L.I.N.N.Y. 2.0 Dashboard",
+            text="L.I.N.N.Y. 3.0 Dashboard",
             font=ctk.CTkFont(size=26, weight="bold")
         )
         title.pack(pady=15)
@@ -856,7 +1004,7 @@ class LinnyGUI:
         # Version badge
         version = ctk.CTkLabel(
             self.root,
-            text="Neural Voice • Calendar • Bilingual",
+            text="Cascading Brain • Neural Voice • Calendar",
             font=ctk.CTkFont(size=11),
             text_color="gray"
         )
@@ -866,10 +1014,28 @@ class LinnyGUI:
         config_frame = ctk.CTkFrame(self.root)
         config_frame.pack(pady=10, padx=30, fill="both", expand=False)
         
-        # API Key
-        ctk.CTkLabel(config_frame, text="Gemini API Key:", font=ctk.CTkFont(size=14)).pack(pady=(15, 5))
-        self.api_key_entry = ctk.CTkEntry(config_frame, width=500, show="*", placeholder_text="Enter your API key")
-        self.api_key_entry.pack(pady=5)
+        # API Keys Section
+        ctk.CTkLabel(
+            config_frame, 
+            text="AI Models (Groq Required • Perplexity for Search • Gemini Backup)",
+            font=ctk.CTkFont(size=12),
+            text_color="gray"
+        ).pack(pady=(15, 10))
+        
+        # Groq API Key (Primary)
+        ctk.CTkLabel(config_frame, text="Groq API Key (Primary):", font=ctk.CTkFont(size=14)).pack(pady=(5, 5))
+        self.groq_api_key_entry = ctk.CTkEntry(config_frame, width=500, show="*", placeholder_text="Enter Groq API key")
+        self.groq_api_key_entry.pack(pady=5)
+        
+        # Perplexity API Key (Search)
+        ctk.CTkLabel(config_frame, text="Perplexity API Key (Search):", font=ctk.CTkFont(size=14)).pack(pady=(5, 5))
+        self.perplexity_api_key_entry = ctk.CTkEntry(config_frame, width=500, show="*", placeholder_text="Enter Perplexity API key")
+        self.perplexity_api_key_entry.pack(pady=5)
+        
+        # Gemini API Key (Backup)
+        ctk.CTkLabel(config_frame, text="Gemini API Key (Backup):", font=ctk.CTkFont(size=14)).pack(pady=(5, 5))
+        self.gemini_api_key_entry = ctk.CTkEntry(config_frame, width=500, show="*", placeholder_text="Enter Gemini API key")
+        self.gemini_api_key_entry.pack(pady=5)
         
         # Wake Word
         ctk.CTkLabel(config_frame, text="Wake Word:", font=ctk.CTkFont(size=14)).pack(pady=(10, 5))
@@ -994,12 +1160,13 @@ class LinnyGUI:
         self.log_console.pack(pady=(0, 15), padx=30)
         
         # Initial log message
-        self.log_to_console("=== L.I.N.N.Y. 2.0 Debug Console ===")
+        self.log_to_console("=== L.I.N.N.Y. 3.0 Debug Console ===")
+        self.log_to_console("✓ Cascading Brain Architecture (Groq → Perplexity → Gemini)")
         self.log_to_console("✓ Edge-TTS Neural Voice Engine")
         self.log_to_console("✓ Google Calendar Integration")
         self.log_to_console("✓ Bilingual Support (English/Tagalog)")
         self.log_to_console("")
-        self.log_to_console("Configure settings and click 'Start Listening'.")
+        self.log_to_console("Configure API keys and click 'Start Listening'.")
     
     def log_to_console(self, message):
         """Add message to log console (thread-safe)"""
@@ -1052,7 +1219,16 @@ class LinnyGUI:
     
     def load_settings_to_gui(self):
         """Load saved settings into GUI fields"""
-        self.api_key_entry.insert(0, self.config.get("api_key", ""))
+        # Migrate old api_key to gemini_api_key if needed
+        if "api_key" in self.config and not self.config.get("gemini_api_key"):
+            self.config["gemini_api_key"] = self.config["api_key"]
+            self.log_to_console("Migrated old API key to gemini_api_key")
+        
+        # Load three API keys
+        self.groq_api_key_entry.insert(0, self.config.get("groq_api_key", ""))
+        self.perplexity_api_key_entry.insert(0, self.config.get("perplexity_api_key", ""))
+        self.gemini_api_key_entry.insert(0, self.config.get("gemini_api_key", ""))
+        
         self.wake_word_entry.insert(0, self.config.get("wake_word", "Linny"))
         self.user_name_entry.insert(0, self.config.get("user_name", "Zeus"))
         self.fake_lock_var.set(self.config.get("fake_lock_enabled", False))
@@ -1068,7 +1244,11 @@ class LinnyGUI:
     
     def save_settings(self):
         """Save GUI settings to config"""
-        self.config["api_key"] = self.api_key_entry.get().strip()
+        # Save three API keys
+        self.config["groq_api_key"] = self.groq_api_key_entry.get().strip()
+        self.config["perplexity_api_key"] = self.perplexity_api_key_entry.get().strip()
+        self.config["gemini_api_key"] = self.gemini_api_key_entry.get().strip()
+        
         self.config["wake_word"] = self.wake_word_entry.get().strip() or "Linny"
         self.config["user_name"] = self.user_name_entry.get().strip() or "Zeus"
         self.config["fake_lock_enabled"] = self.fake_lock_var.get()
@@ -1092,7 +1272,7 @@ class LinnyGUI:
         # Reinitialize assistant with new config
         if self.assistant:
             self.assistant.config = self.config
-            self.assistant.setup_gemini()
+            self.assistant.brain_manager = BrainManager(self.config, self.assistant.log)
             self.assistant.update_thinking_phrases()
             self.assistant.microphone = None
     
