@@ -1,8 +1,11 @@
 """
-L.I.N.N.Y. 3.0 - Loyal Intelligent Neural Network for You
+L.I.N.N.Y. 4.0 - Loyal Intelligent Neural Network for You
 A voice assistant desktop application with GUI dashboard and system automation.
 
-Version 3.0 Features:
+Version 4.0 Features:
+- System Tray Integration with Dynamic Status Icons
+- Manual Location & Timezone Settings
+- Global Mute Functionality
 - Cascading Brain Architecture (Groq → Perplexity → Gemini)
 - Edge-TTS Neural Voices (High Quality)
 - Google Calendar API Integration
@@ -19,11 +22,19 @@ import webbrowser
 import ctypes
 import asyncio
 import tempfile
+import psutil
 from pathlib import Path
 from datetime import datetime, timedelta
 
 # GUI
 import customtkinter as ctk
+
+# System Tray
+import pystray
+from PIL import Image, ImageDraw
+
+# Timezone
+import pytz
 
 # AI
 import google.generativeai as genai
@@ -64,7 +75,10 @@ DEFAULT_CONFIG = {
     "user_name": "Zeus",
     "fake_lock_enabled": False,
     "microphone_index": None,
-    "language": "en-US"  # en-US or fil-PH
+    "language": "en-US",  # en-US or fil-PH
+    "location": "Philippines",
+    "timezone": "Asia/Manila",
+    "is_muted": False
 }
 
 
@@ -274,6 +288,255 @@ class BrainManager:
             return "Sorry, all AI models are currently unavailable."
 
 
+
+
+class TrayIconManager:
+    """
+    Enhanced System Tray Manager for L.I.N.N.Y. 4.0
+    Manages system tray icon with dynamic status indicators and menu.
+    Features:
+    - Dynamic color-coded status (Green=Listening, Blue=Speaking, Yellow=Thinking, Red=Muted/Stopped)
+    - Thread-safe icon updates from brain state changes
+    - Daemon thread for non-blocking tray operations
+    """
+    
+    def __init__(self, gui_instance):
+        self.gui = gui_instance
+        self.icon = None
+        self.current_status = "stopped"
+        self.tray_thread = None
+        self.tray_lock = threading.Lock()
+        
+        # Color mapping for status with RGB values
+        self.status_colors = {
+            "stopped": (220, 53, 69),    # Red - Stopped/Offline
+            "muted": (220, 53, 69),      # Red - Muted
+            "listening": (40, 167, 69),  # Green - Listening for wake word
+            "thinking": (255, 193, 7),   # Yellow - Processing/Thinking
+            "speaking": (13, 110, 253)   # Blue - Speaking/Audio Output
+        }
+        
+        self.status_labels = {
+            "stopped": "🔴 Stopped",
+            "muted": "🔴 Muted",
+            "listening": "🟢 Listening",
+            "thinking": "🟡 Thinking",
+            "speaking": "🔵 Speaking"
+        }
+    
+    def create_icon(self, color):
+        """Generate a 64x64 colored square icon using Pillow in memory"""
+        try:
+            # Create image with color
+            image = Image.new('RGB', (64, 64), color=color)
+            
+            # Add a white border for better visibility against taskbar
+            draw = ImageDraw.Draw(image)
+            draw.rectangle([0, 0, 63, 63], outline=(255, 255, 255), width=2)
+            
+            # Optional: Add a subtle inner border
+            draw.rectangle([2, 2, 61, 61], outline=(200, 200, 200), width=1)
+            
+            return image
+        except Exception as e:
+            print(f"[Tray] Icon creation error: {e}")
+            # Fallback to simple red icon
+            return Image.new('RGB', (64, 64), color=color)
+    
+    def update_icon(self, status):
+        """Thread-safe icon update based on status"""
+        if status not in self.status_colors:
+            status = "stopped"
+        
+        with self.tray_lock:
+            self.current_status = status
+            
+            if self.icon:
+                try:
+                    color = self.status_colors[status]
+                    new_image = self.create_icon(color)
+                    self.icon.icon = new_image
+                    self.icon.tooltip = f"L.I.N.N.Y. 4.0 - {self.status_labels.get(status, 'Unknown')}"
+                except Exception as e:
+                    print(f"[Tray] Icon update error: {e}")
+    
+    def create_menu(self):
+        """Build context menu for tray icon"""
+        return pystray.Menu(
+            pystray.MenuItem(
+                "📱 Open Dashboard",
+                self.on_open_dashboard,
+                default=True
+            ),
+            pystray.MenuItem(
+                lambda text: f"{'🔊 Unmute' if self.gui.config.get('is_muted', False) else '🔇 Mute'}",
+                self.on_toggle_mute
+            ),
+            pystray.MenuItem(
+                "❌ Exit L.I.N.N.Y.",
+                self.on_exit
+            )
+        )
+    
+    def on_open_dashboard(self, icon, item):
+        """Show and restore GUI window"""
+        try:
+            self.gui.show_window()
+        except Exception as e:
+            print(f"[Tray] Show window error: {e}")
+    
+    def on_toggle_mute(self, icon, item):
+        """Toggle mute state"""
+        try:
+            self.gui.toggle_mute()
+        except Exception as e:
+            print(f"[Tray] Mute toggle error: {e}")
+    
+    def on_exit(self, icon, item):
+        """Clean shutdown"""
+        try:
+            self.stop()
+            self.gui.root.quit()
+        except Exception as e:
+            print(f"[Tray] Exit error: {e}")
+    
+    def run(self):
+        """Start tray icon in separate daemon thread"""
+        def start_tray():
+            try:
+                # Create initial icon (red/stopped)
+                initial_image = self.create_icon(self.status_colors["stopped"])
+                self.icon = pystray.Icon(
+                    "linny_4_0",
+                    initial_image,
+                    "L.I.N.N.Y. 4.0 - Ready",
+                    menu=self.create_menu()
+                )
+                print("[Tray] System Tray icon initialized")
+                self.icon.run()
+            except Exception as e:
+                print(f"[Tray] Tray initialization error: {e}")
+        
+        # Run in daemon thread (won't block app exit)
+        self.tray_thread = threading.Thread(target=start_tray, daemon=True)
+        self.tray_thread.start()
+        print("[Tray] Daemon thread started")
+    
+    def stop(self):
+        """Stop tray icon gracefully"""
+        try:
+            if self.icon:
+                self.icon.stop()
+                print("[Tray] Tray icon stopped")
+        except Exception as e:
+            print(f"[Tray] Stop error: {e}")
+
+
+class HeadlessTrayManager:
+    """
+    Minimal Tray Manager for Headless Startup Mode
+    Manages system tray icon without GUI window for boot automation
+    """
+    
+    def __init__(self, config, assistant):
+        self.config = config
+        self.assistant = assistant
+        self.icon = None
+        self.current_status = "stopped"
+        self.tray_thread = None
+        self.tray_lock = threading.Lock()
+        
+        # Color mapping for status with RGB values
+        self.status_colors = {
+            "stopped": (220, 53, 69),    # Red
+            "muted": (220, 53, 69),      # Red
+            "listening": (40, 167, 69),  # Green
+            "thinking": (255, 193, 7),   # Yellow
+            "speaking": (13, 110, 253)   # Blue
+        }
+        
+        self.status_labels = {
+            "stopped": "🔴 Stopped",
+            "muted": "🔴 Muted",
+            "listening": "🟢 Listening",
+            "thinking": "🟡 Thinking",
+            "speaking": "🔵 Speaking"
+        }
+    
+    def create_icon(self, color):
+        """Generate a 64x64 colored square icon using Pillow in memory"""
+        try:
+            image = Image.new('RGB', (64, 64), color=color)
+            draw = ImageDraw.Draw(image)
+            draw.rectangle([0, 0, 63, 63], outline=(255, 255, 255), width=2)
+            draw.rectangle([2, 2, 61, 61], outline=(200, 200, 200), width=1)
+            return image
+        except Exception as e:
+            print(f"[HeadlessTray] Icon creation error: {e}")
+            return Image.new('RGB', (64, 64), color=color)
+    
+    def update_icon(self, status):
+        """Thread-safe icon update based on status"""
+        if status not in self.status_colors:
+            status = "stopped"
+        
+        with self.tray_lock:
+            self.current_status = status
+            
+            if self.icon:
+                try:
+                    color = self.status_colors[status]
+                    new_image = self.create_icon(color)
+                    self.icon.icon = new_image
+                    self.icon.tooltip = f"L.I.N.N.Y. 4.0 - {self.status_labels.get(status, 'Unknown')}"
+                except Exception as e:
+                    print(f"[HeadlessTray] Icon update error: {e}")
+    
+    def create_menu(self):
+        """Build context menu for headless tray icon"""
+        return pystray.Menu(
+            pystray.MenuItem(
+                "📱 Exit L.I.N.N.Y.",
+                self.on_exit
+            )
+        )
+    
+    def on_exit(self, icon, item):
+        """Clean shutdown"""
+        try:
+            self.stop()
+            self.assistant.stop_listening()
+        except Exception as e:
+            print(f"[HeadlessTray] Exit error: {e}")
+    
+    def run(self):
+        """Start tray icon in separate daemon thread"""
+        def start_tray():
+            try:
+                initial_image = self.create_icon(self.status_colors["stopped"])
+                self.icon = pystray.Icon(
+                    "linny_headless",
+                    initial_image,
+                    "L.I.N.N.Y. 4.0 - Startup Mode",
+                    menu=self.create_menu()
+                )
+                print("[HeadlessTray] System Tray icon initialized")
+                self.icon.run()
+            except Exception as e:
+                print(f"[HeadlessTray] Tray initialization error: {e}")
+        
+        self.tray_thread = threading.Thread(target=start_tray, daemon=True)
+        self.tray_thread.start()
+        print("[HeadlessTray] Daemon thread started")
+    
+    def stop(self):
+        """Stop tray icon gracefully"""
+        try:
+            if self.icon:
+                self.icon.stop()
+                print("[HeadlessTray] Tray icon stopped")
+        except Exception as e:
+            print(f"[HeadlessTray] Stop error: {e}")
 
 
 class GoogleCalendarManager:
@@ -533,6 +796,7 @@ class LinnyAssistant:
         self.log_callback = log_callback
         self.is_listening = False
         self.is_speaking = False  # NEW: Prevent self-listening loop
+        self.is_muted = config.get("is_muted", False)  # NEW: Global mute state
         self.recognizer = sr.Recognizer()
         self.microphone = None
         
@@ -613,6 +877,30 @@ class LinnyAssistant:
         if self.status_callback:
             self.status_callback(message)
     
+    def set_mute(self, muted):
+        """Set mute state"""
+        self.is_muted = muted
+        self.config["is_muted"] = muted
+        if muted:
+            self.log("🔇 Muted")
+            # Stop speaking if currently speaking
+            if self.is_speaking:
+                try:
+                    pygame.mixer.music.stop()
+                except:
+                    pass
+        else:
+            self.log("🔊 Unmuted")
+    
+    def get_current_time(self):
+        """Get current time in configured timezone"""
+        try:
+            tz = pytz.timezone(self.config.get("timezone", "Asia/Manila"))
+            return datetime.now(tz)
+        except:
+            # Fallback to system time if timezone is invalid
+            return datetime.now()
+    
     async def async_speak(self, text):
         """Async TTS using Edge-TTS"""
         try:
@@ -658,6 +946,11 @@ class LinnyAssistant:
     
     def speak(self, text):
         """Thread-safe wrapper for async TTS"""
+        # Check mute state
+        if self.is_muted:
+            self.log(f"🔇 Muted - Skipping speech: {text}")
+            return
+        
         def run_async_speak():
             try:
                 self.log(f"Speaking: {text}")
@@ -850,12 +1143,13 @@ class LinnyAssistant:
         # Time command
         if "time" in command or "oras" in command:
             self.log("Executing: Check current time")
-            current_time = datetime.now().strftime("%I:%M %p")
+            current_time = self.get_current_time().strftime("%I:%M %p")
+            timezone_name = self.config.get("timezone", "Asia/Manila")
             if language == 'fil-PH':
                 response = f"Ngayon ay {current_time}"
             else:
                 response = f"It is currently {current_time}"
-            self.log(f"Time response: {response}")
+            self.log(f"Time response: {response} (Timezone: {timezone_name})")
             self.speak(response)
             return
         
@@ -909,6 +1203,11 @@ class LinnyAssistant:
         
         def listen_loop():
             while self.is_listening:
+                # Skip listening if muted
+                if self.is_muted:
+                    time.sleep(0.1)
+                    continue
+                
                 # Skip listening if currently speaking (prevent self-listening)
                 if self.is_speaking:
                     time.sleep(0.1)
@@ -933,23 +1232,31 @@ class LinnyAssistant:
 
 
 class LinnyGUI:
-    """CustomTkinter GUI Dashboard with L.I.N.N.Y. 2.0 Features"""
+    """CustomTkinter GUI Dashboard with L.I.N.N.Y. 4.0 Features"""
     
     def __init__(self):
         self.config = self.load_config()
         self.assistant = None
+        self.tray_manager = None
         
         # Setup window
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
         
         self.root = ctk.CTk()
-        self.root.title("L.I.N.N.Y. 2.0 Dashboard")
-        self.root.geometry("700x900")
+        self.root.title("L.I.N.N.Y. 4.0 Dashboard")
+        self.root.geometry("700x1000")  # Increased height for new fields
         self.root.resizable(False, False)
+        
+        # Set window protocol for minimize-to-tray
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         self.create_widgets()
         self.load_settings_to_gui()
+        
+        # Initialize system tray (using enhanced TrayIconManager)
+        self.tray_manager = TrayIconManager(self)
+        self.tray_manager.run()
     
     def load_config(self):
         """Load configuration from JSON file"""
@@ -996,7 +1303,7 @@ class LinnyGUI:
         # Title
         title = ctk.CTkLabel(
             self.root,
-            text="L.I.N.N.Y. 3.0 Dashboard",
+            text="L.I.N.N.Y. 4.0 Dashboard",
             font=ctk.CTkFont(size=26, weight="bold")
         )
         title.pack(pady=15)
@@ -1004,7 +1311,7 @@ class LinnyGUI:
         # Version badge
         version = ctk.CTkLabel(
             self.root,
-            text="Cascading Brain • Neural Voice • Calendar",
+            text="System Tray • Timezone • Mute • Cascading Brain • Neural Voice",
             font=ctk.CTkFont(size=11),
             text_color="gray"
         )
@@ -1073,6 +1380,38 @@ class LinnyGUI:
         )
         self.microphone_menu.pack(pady=5)
         
+        # Location (NEW v4.0)
+        ctk.CTkLabel(config_frame, text="Location:", font=ctk.CTkFont(size=14)).pack(pady=(10, 5))
+        self.location_entry = ctk.CTkEntry(config_frame, width=500, placeholder_text="e.g., Philippines")
+        self.location_entry.pack(pady=5)
+        
+        # Timezone (NEW v4.0)
+        ctk.CTkLabel(config_frame, text="Timezone:", font=ctk.CTkFont(size=14)).pack(pady=(10, 5))
+        self.timezone_var = ctk.StringVar(value="Asia/Manila")
+        common_timezones = [
+            "Asia/Manila", "UTC", "America/New_York", "America/Los_Angeles",
+            "Europe/London", "Europe/Paris", "Asia/Tokyo", "Asia/Singapore",
+            "Australia/Sydney", "Pacific/Auckland"
+        ]
+        self.timezone_menu = ctk.CTkOptionMenu(
+            config_frame,
+            variable=self.timezone_var,
+            values=common_timezones,
+            width=500
+        )
+        self.timezone_menu.pack(pady=5)
+        
+        # Mute Toggle (NEW v4.0)
+        self.mute_var = ctk.BooleanVar(value=False)
+        self.mute_switch = ctk.CTkSwitch(
+            config_frame,
+            text="🔇 Global Mute (Stop Listening & Speaking)",
+            variable=self.mute_var,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            command=self.on_mute_toggle
+        )
+        self.mute_switch.pack(pady=10)
+        
         # Fake Lock Switch
         self.fake_lock_var = ctk.BooleanVar(value=False)
         self.fake_lock_switch = ctk.CTkSwitch(
@@ -1081,7 +1420,18 @@ class LinnyGUI:
             variable=self.fake_lock_var,
             font=ctk.CTkFont(size=14)
         )
-        self.fake_lock_switch.pack(pady=10)
+        self.fake_lock_switch.pack(pady=5)
+        
+        # Auto-Login Setup Button (NEW v4.0)
+        self.autologon_button = ctk.CTkButton(
+            config_frame,
+            text="⚙️ Setup Auto-Login (Sysinternals Autologon)",
+            command=self.open_autologon_page,
+            font=ctk.CTkFont(size=12),
+            height=30,
+            fg_color="gray40"
+        )
+        self.autologon_button.pack(pady=5)
         
         # Buttons Frame (Row 1)
         button_frame1 = ctk.CTkFrame(self.root)
@@ -1160,7 +1510,10 @@ class LinnyGUI:
         self.log_console.pack(pady=(0, 15), padx=30)
         
         # Initial log message
-        self.log_to_console("=== L.I.N.N.Y. 3.0 Debug Console ===")
+        self.log_to_console("=== L.I.N.N.Y. 4.0 Debug Console ===")
+        self.log_to_console("✓ System Tray Integration with Dynamic Icons")
+        self.log_to_console("✓ Manual Location & Timezone Settings")
+        self.log_to_console("✓ Global Mute Functionality")
         self.log_to_console("✓ Cascading Brain Architecture (Groq → Perplexity → Gemini)")
         self.log_to_console("✓ Edge-TTS Neural Voice Engine")
         self.log_to_console("✓ Google Calendar Integration")
@@ -1241,6 +1594,13 @@ class LinnyGUI:
         mic_index = self.config.get("microphone_index")
         if mic_index is not None and mic_index < len(self.microphone_list):
             self.microphone_var.set(f"[{mic_index}] {self.microphone_list[mic_index]}")
+        
+        # Load location and timezone (NEW v4.0)
+        self.location_entry.insert(0, self.config.get("location", "Philippines"))
+        self.timezone_var.set(self.config.get("timezone", "Asia/Manila"))
+        
+        # Load mute state (NEW v4.0)
+        self.mute_var.set(self.config.get("is_muted", False))
     
     def save_settings(self):
         """Save GUI settings to config"""
@@ -1267,6 +1627,13 @@ class LinnyGUI:
             self.config["microphone_index"] = None
             self.log_to_console("Using default microphone")
         
+        # Save location and timezone (NEW v4.0)
+        self.config["location"] = self.location_entry.get().strip() or "Philippines"
+        self.config["timezone"] = self.timezone_var.get()
+        
+        # Save mute state (NEW v4.0)
+        self.config["is_muted"] = self.mute_var.get()
+        
         self.save_config()
         
         # Reinitialize assistant with new config
@@ -1275,6 +1642,7 @@ class LinnyGUI:
             self.assistant.brain_manager = BrainManager(self.config, self.assistant.log)
             self.assistant.update_thinking_phrases()
             self.assistant.microphone = None
+            self.assistant.is_muted = self.config["is_muted"]
     
     def test_voice(self):
         """Test Edge-TTS voice output"""
@@ -1296,9 +1664,15 @@ class LinnyGUI:
         if not self.assistant.is_listening:
             self.assistant.start_listening()
             self.listen_button.configure(text="Stop Listening", fg_color="red")
+            # Update tray icon to listening (green)
+            if self.tray_manager and not self.assistant.is_muted:
+                self.tray_manager.update_icon("listening")
         else:
             self.assistant.stop_listening()
             self.listen_button.configure(text="Start Listening", fg_color="green")
+            # Update tray icon to stopped (red)
+            if self.tray_manager:
+                self.tray_manager.update_icon("stopped")
     
     def update_status(self, message):
         """Update status label (thread-safe)"""
@@ -1307,68 +1681,190 @@ class LinnyGUI:
         
         self.root.after(0, _update)
     
+    def toggle_mute(self):
+        """Toggle mute state (called from tray menu)"""
+        current_mute = self.config.get("is_muted", False)
+        new_mute = not current_mute
+        
+        # Update config and GUI
+        self.config["is_muted"] = new_mute
+        self.mute_var.set(new_mute)
+        
+        # Update assistant if running
+        if self.assistant:
+            self.assistant.set_mute(new_mute)
+        
+        # Update tray icon
+        if self.tray_manager:
+            self.tray_manager.update_icon("muted" if new_mute else "listening")
+        
+        # Log
+        status = "Muted" if new_mute else "Unmuted"
+        self.log_to_console(f"🔇 {status}")
+        self.save_config()
+    
+    def on_mute_toggle(self):
+        """Handle mute toggle from GUI switch"""
+        is_muted = self.mute_var.get()
+        self.config["is_muted"] = is_muted
+        
+        # Update assistant if running
+        if self.assistant:
+            self.assistant.set_mute(is_muted)
+        
+        # Update tray icon
+        if self.tray_manager:
+            self.tray_manager.update_icon("muted" if is_muted else "listening")
+        
+        self.save_config()
+    
+    def open_autologon_page(self):
+        """Open Microsoft Sysinternals Autologon download page"""
+        url = "https://learn.microsoft.com/en-us/sysinternals/downloads/autologon"
+        self.log_to_console(f"Opening Autologon page: {url}")
+        webbrowser.open(url)
+    
+    def on_closing(self):
+        """Handle window close event - minimize to tray instead of exit"""
+        self.log_to_console("Minimizing to system tray...")
+        self.hide_window()
+    
+    def show_window(self):
+        """Restore window from tray"""
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+    
+    def hide_window(self):
+        """Minimize window to tray"""
+        self.root.withdraw()
+    
     def run(self):
         """Start the GUI main loop"""
         self.root.mainloop()
 
 
 def startup_mode():
-    """Headless startup mode with fake lock"""
+    """
+    Headless startup mode - no GUI window shown, only system tray
+    Features:
+    - Greeting based on time and timezone
+    - Automatic workstation lock
+    - Background listening via tray
+    - System tray with status indicators
+    """
+    print("[STARTUP] ========================================")
+    print("[STARTUP] L.I.N.N.Y. 4.0 - Startup Mode (Headless)")
+    print("[STARTUP] ========================================")
+    
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, 'r') as f:
                 config = json.load(f)
-        except:
+        except Exception as e:
+            print(f"[STARTUP] Config load error: {e}, using defaults")
             config = DEFAULT_CONFIG.copy()
     else:
+        print("[STARTUP] No config file found, using defaults")
         config = DEFAULT_CONFIG.copy()
     
     # Initialize assistant
+    print("[STARTUP] Initializing LinnyAssistant...")
     assistant = LinnyAssistant(config)
     
-    # Wait 5 seconds
-    print("[LINNY] Startup mode: Waiting 5 seconds...")
+    # Initialize minimal headless tray (no GUI window)
+    print("[STARTUP] Initializing System Tray...")
+    tray_manager = HeadlessTrayManager(config, assistant)
+    tray_manager.run()
+    
+    # Wait 5 seconds for system stabilization
+    print("[STARTUP] Waiting 5 seconds for system stabilization...")
     time.sleep(5)
     
-    # Speak greeting
+    # Speak timezone-aware greeting
     user_name = config.get("user_name", "Zeus")
     language = config.get("language", "en-US")
     
-    if language == 'fil-PH':
-        greeting = f"Magandang umaga, {user_name}. Online na ang mga sistema."
-    else:
-        greeting = f"Good morning, {user_name}. Systems are online."
+    # Get current time in configured timezone
+    try:
+        tz = pytz.timezone(config.get("timezone", "Asia/Manila"))
+        current_time = datetime.now(tz)
+        hour = current_time.hour
+    except Exception as e:
+        print(f"[STARTUP] Timezone error: {e}, using system time")
+        current_time = datetime.now()
+        hour = current_time.hour
     
-    print(f"[LINNY] {greeting}")
+    # Determine greeting based on time of day
+    if hour < 12:
+        time_of_day = "morning" if language == "en-US" else "umaga"
+    elif hour < 18:
+        time_of_day = "afternoon" if language == "en-US" else "hapon"
+    else:
+        time_of_day = "evening" if language == "en-US" else "gabi"
+    
+    if language == 'fil-PH':
+        greeting = f"Magandang {time_of_day}, {user_name}. Online na ang mga sistema."
+    else:
+        greeting = f"Good {time_of_day}, {user_name}. Systems are online."
+    
+    print(f"[STARTUP] Speaking greeting: {greeting}")
     assistant.speak(greeting)
     
     # Wait for speech to complete
     time.sleep(4)
     
+    # Update tray to "listening" (green)
+    tray_manager.update_icon("listening")
+    
     # Lock workstation
-    print("[LINNY] Locking workstation...")
+    print("[STARTUP] Locking workstation...")
     try:
         ctypes.windll.user32.LockWorkStation()
+        print("[STARTUP] ✓ Workstation locked")
     except Exception as e:
-        print(f"[LINNY] Lock error: {e}")
+        print(f"[STARTUP] ⚠ Lock error: {e}")
     
-    # Continue listening in background
-    print("[LINNY] Starting background listening...")
+    # Start listening in background
+    print("[STARTUP] Starting background listening...")
     assistant.start_listening()
+    print("[STARTUP] ✓ Background listening started")
+    print("[STARTUP] Ready! Use system tray to interact.")
     
-    # Keep alive
+    # Keep alive indefinitely
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("[LINNY] Shutting down...")
+        print("[STARTUP] Shutting down...")
+        assistant.stop_listening()
+        tray_manager.stop()
 
 
 def main():
-    """Main entry point"""
+    """
+    Main entry point with high-priority startup
+    Sets process priority to HIGH_PRIORITY_CLASS for faster startup
+    """
+    # ============================================
+    # HIGH PRIORITY STARTUP
+    # ============================================
+    print("[MAIN] Setting process priority to HIGH_PRIORITY_CLASS...")
+    try:
+        process = psutil.Process()
+        process.nice(psutil.HIGH_PRIORITY_CLASS)
+        print(f"[MAIN] ✓ Process priority set (PID: {process.pid})")
+    except Exception as e:
+        print(f"[MAIN] ⚠ Could not set priority: {e}")
+    
+    # ============================================
+    # STARTUP MODE CHECK
+    # ============================================
     if "--startup" in sys.argv:
+        print("[MAIN] Launching in --startup mode (headless)")
         startup_mode()
     else:
+        print("[MAIN] Launching GUI mode")
         app = LinnyGUI()
         app.run()
 
