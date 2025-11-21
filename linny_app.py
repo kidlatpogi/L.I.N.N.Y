@@ -85,9 +85,9 @@ class BrainManager:
         
         # Search intent keywords
         self.search_keywords = [
-            "search", "price", "news", "who won", "latest", 
+            "search", "price", "news", "who won", "latest", "weather",
             "current", "find", "lookup", "what is", "what's",
-            "hanap", "presyo", "balita"  # Tagalog equivalents
+            "hanap", "presyo", "balita", "panahon"  # Tagalog equivalents
         ]
         
         # Initialize AI clients
