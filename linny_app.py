@@ -786,6 +786,99 @@ class GoogleCalendarManager:
         
         return speech.strip()
 
+    def get_events_for_date(self, target_date, calendar_id='primary', max_results=10, tz_str='Asia/Manila'):
+        """Fetch events for a specific date (local to tz_str) and return list of events.
+        `target_date` should be a datetime.date instance.
+        Results are sorted by start time and limited to `max_results`.
+        """
+        try:
+            # Ensure authenticated
+            if not self.service:
+                ok = self.authenticate()
+                if not ok:
+                    self.log("Could not authenticate for calendar access", is_error=True)
+                    return None
+
+            try:
+                tz = pytz.timezone(tz_str)
+            except Exception:
+                tz = pytz.UTC
+
+            # Build localized start and end for the target date
+            start_local = datetime.combine(target_date, datetime.min.time())
+            end_local = datetime.combine(target_date, datetime.max.time())
+
+            # Localize then convert to UTC for RFC3339
+            start_local = tz.localize(start_local)
+            end_local = tz.localize(end_local)
+
+            time_min = start_local.astimezone(pytz.UTC).isoformat()
+            time_max = end_local.astimezone(pytz.UTC).isoformat()
+
+            request_params = {
+                'calendarId': calendar_id,
+                'timeMin': time_min,
+                'timeMax': time_max,
+                'maxResults': max_results,
+                'singleEvents': True,
+                'orderBy': 'startTime'
+            }
+
+            self.log(f"Fetching events for date {target_date} (calendar: {calendar_id})")
+            events_result = self.service.events().list(**request_params).execute()
+            events = events_result.get('items', [])
+
+            # Sort by start time (in case API returns unordered)
+            def _get_start(e):
+                start = e.get('start', {}).get('dateTime') or e.get('start', {}).get('date')
+                try:
+                    return date_parser.parse(start)
+                except Exception:
+                    return datetime.max
+
+            events.sort(key=_get_start)
+            return events[:max_results]
+
+        except HttpError as e:
+            self.log(f"Calendar API error (get_events_for_date): {e}", is_error=True)
+            return None
+        except Exception as e:
+            self.log(f"Error fetching events for date: {e}", is_error=True)
+            return None
+
+    def get_events_for_multiple_calendars_on_date(self, calendar_names, target_date, max_results=10, tz_str='Asia/Manila'):
+        """Fetch and merge events for multiple named calendars for a given date.
+        Returns a sorted list of events (by start time) limited to max_results.
+        """
+        try:
+            all_events = []
+            for name in calendar_names:
+                try:
+                    cal_id = self.get_calendar_id(name)
+                except Exception:
+                    cal_id = 'primary'
+
+                events = self.get_events_for_date(target_date, calendar_id=cal_id, max_results=max_results, tz_str=tz_str)
+                if events:
+                    all_events.extend(events)
+
+            if not all_events:
+                return []
+
+            def get_event_start_time(event):
+                start = event.get('start', {}).get('dateTime') or event.get('start', {}).get('date')
+                try:
+                    return date_parser.parse(start)
+                except Exception:
+                    return datetime.max
+
+            all_events.sort(key=get_event_start_time)
+            return all_events[:max_results]
+
+        except Exception as e:
+            self.log(f"Error merging calendar events for date: {e}", is_error=True)
+            return None
+
 
 class LinnyAssistant:
     """Core voice assistant logic with Edge-TTS and multilingual support"""
@@ -1744,6 +1837,123 @@ class LinnyGUI:
         self.root.mainloop()
 
 
+def run_startup_sequence(config, assistant, tray_manager=None):
+    """Run the strict-timezone greeting and Smart Schedule flow.
+
+    Behavior:
+    - Uses `config['timezone']` (default Asia/Manila) via pytz for all time calculations.
+    - Speaks a timezone-accurate greeting (morning/afternoon/evening).
+    - Checks today's events across Primary+School calendars. If any, speaks them.
+    - If none, says the day is clear and immediately fetches tomorrow's events and speaks them.
+    """
+    try:
+        tz_str = config.get("timezone", "Asia/Manila")
+        language = config.get("language", "en-US")
+        user_name = config.get("user_name", "Zeus")
+
+        try:
+            tz = pytz.timezone(tz_str)
+        except Exception as e:
+            assistant.log(f"[Startup] Invalid timezone '{tz_str}', falling back to UTC: {e}", is_error=True)
+            tz = pytz.UTC
+
+        now = datetime.now(tz)
+        hour = now.hour
+
+        if hour < 12:
+            time_of_day = "umaga" if language == 'fil-PH' else "morning"
+        elif hour < 18:
+            time_of_day = "hapon" if language == 'fil-PH' else "afternoon"
+        else:
+            time_of_day = "gabi" if language == 'fil-PH' else "evening"
+
+        if language == 'fil-PH':
+            greeting = f"Magandang {time_of_day}, {user_name}. Online na ang mga sistema."
+        else:
+            greeting = f"Good {time_of_day}, {user_name}. Systems are online."
+
+        assistant.log(f"[Startup] Greeting (tz={tz_str}): {greeting}")
+        assistant.speak(greeting)
+        # Small pause to ensure greeting starts
+        time.sleep(2)
+
+        # Indicate we're checking calendar
+        if tray_manager:
+            try:
+                tray_manager.update_icon("thinking")
+            except Exception:
+                pass
+
+        # SMART SCHEDULE: Today -> if empty then Tomorrow
+        today_date = now.date()
+        calendar_names = ['Primary', 'School']
+
+        assistant.log("[Startup] Checking events for Today...")
+        events_today = assistant.calendar_manager.get_events_for_multiple_calendars_on_date(
+            calendar_names, today_date, max_results=10, tz_str=tz_str
+        )
+
+        if events_today is None:
+            # Could not access calendar (auth failure or API error)
+            assistant.log("[Startup] Could not fetch today's events (calendar access issue)", is_error=True)
+            if language == 'fil-PH':
+                assistant.speak("Hindi ma-access ang iyong kalendaryo ngayon. Buksan ang Calendar para tingnan.")
+            else:
+                assistant.speak("Could not access your calendar right now. Please check Calendar.")
+        elif len(events_today) > 0:
+            assistant.log(f"[Startup] Found {len(events_today)} event(s) for today")
+            speech = assistant.calendar_manager.format_events_for_speech(events_today, language)
+            assistant.speak(speech)
+        else:
+            # No events today: speak clear then immediately fetch tomorrow
+            assistant.log("[Startup] No events left for today")
+            if language == 'fil-PH':
+                assistant.speak("Malinaw ang iskedyul mo ngayon.")
+            else:
+                assistant.speak("Your schedule for today is clear.")
+
+            # Fetch tomorrow's events immediately
+            tomorrow_date = today_date + timedelta(days=1)
+            assistant.log("[Startup] Checking events for Tomorrow...")
+            events_tomorrow = assistant.calendar_manager.get_events_for_multiple_calendars_on_date(
+                calendar_names, tomorrow_date, max_results=10, tz_str=tz_str
+            )
+
+            if events_tomorrow is None:
+                assistant.log("[Startup] Could not fetch tomorrow's events (calendar access issue)", is_error=True)
+                if language == 'fil-PH':
+                    assistant.speak("Hindi ma-access ang iyong kalendaryo para bukas.")
+                else:
+                    assistant.speak("Could not access your calendar for tomorrow.")
+            elif len(events_tomorrow) > 0:
+                assistant.log(f"[Startup] Found {len(events_tomorrow)} event(s) for tomorrow")
+                # Prepend a short phrase about tomorrow
+                if language == 'fil-PH':
+                    prefix = "Para sa bukas, "
+                else:
+                    prefix = "For tomorrow, "
+
+                speech = assistant.calendar_manager.format_events_for_speech(events_tomorrow, language)
+                assistant.speak(prefix + speech)
+            else:
+                if language == 'fil-PH':
+                    assistant.speak("Wala kang naka-schedule bukas.")
+                else:
+                    assistant.speak("You have no events tomorrow.")
+
+        # Restore tray icon to listening state
+        if tray_manager:
+            try:
+                tray_manager.update_icon("listening")
+            except Exception:
+                pass
+
+    except Exception as e:
+        try:
+            assistant.log(f"[Startup] run_startup_sequence error: {e}", is_error=True)
+        except Exception:
+            print(f"[Startup] run_startup_sequence error: {e}")
+
 def startup_mode():
     """
     Headless startup mode - no GUI window shown, only system tray
@@ -1782,40 +1992,11 @@ def startup_mode():
     time.sleep(5)
     
     # Speak timezone-aware greeting
-    user_name = config.get("user_name", "Zeus")
-    language = config.get("language", "en-US")
-    
-    # Get current time in configured timezone
+    # Run refined startup sequence (timezone-based greeting + smart schedule)
     try:
-        tz = pytz.timezone(config.get("timezone", "Asia/Manila"))
-        current_time = datetime.now(tz)
-        hour = current_time.hour
+        run_startup_sequence(config, assistant, tray_manager)
     except Exception as e:
-        print(f"[STARTUP] Timezone error: {e}, using system time")
-        current_time = datetime.now()
-        hour = current_time.hour
-    
-    # Determine greeting based on time of day
-    if hour < 12:
-        time_of_day = "morning" if language == "en-US" else "umaga"
-    elif hour < 18:
-        time_of_day = "afternoon" if language == "en-US" else "hapon"
-    else:
-        time_of_day = "evening" if language == "en-US" else "gabi"
-    
-    if language == 'fil-PH':
-        greeting = f"Magandang {time_of_day}, {user_name}. Online na ang mga sistema."
-    else:
-        greeting = f"Good {time_of_day}, {user_name}. Systems are online."
-    
-    print(f"[STARTUP] Speaking greeting: {greeting}")
-    assistant.speak(greeting)
-    
-    # Wait for speech to complete
-    time.sleep(4)
-    
-    # Update tray to "listening" (green)
-    tray_manager.update_icon("listening")
+        print(f"[STARTUP] run_startup_sequence error: {e}")
     
     # Lock workstation
     print("[STARTUP] Locking workstation...")
