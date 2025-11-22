@@ -14,6 +14,9 @@ import subprocess
 import webbrowser
 import gc
 import shutil
+import time
+import requests
+import concurrent.futures
 from datetime import datetime, timedelta
 from pathlib import Path
 import ctypes
@@ -506,6 +509,10 @@ class LinnyApp:
         self.is_muted = False
         self.is_listening = False
         
+        # Non-blocking architecture
+        self._audio_source = None  # persistent microphone AudioSource
+        self._command_executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+        
         # GUI
         if not headless:
             self._setup_gui()
@@ -690,10 +697,75 @@ class LinnyApp:
             self.root.quit()
         sys.exit(0)
     
+    def _get_weather(self):
+        """Fetch weather for Dasmariñas, Cavite via Open-Meteo."""
+        try:
+            url = (
+                "https://api.open-meteo.com/v1/forecast"
+                "?latitude=14.32&longitude=120.93&current_weather=true&timezone=Asia%2FManila"
+            )
+            resp = requests.get(url, timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+            cw = data.get('current_weather') or {}
+            temp = cw.get('temperature')
+            code = cw.get('weathercode')
+            
+            if temp is None:
+                return "I couldn't read the temperature."
+            
+            # Simple WMO code mapping
+            condition = 'unknown'
+            if code == 0:
+                condition = 'clear'
+            elif code in (1, 2, 3):
+                condition = 'cloudy'
+            elif 45 <= code <= 48:
+                condition = 'foggy'
+            elif 50 <= code <= 67 or 80 <= code <= 86:
+                condition = 'rainy'
+            elif code >= 95:
+                condition = 'thunderstorms'
+            else:
+                condition = 'cloudy'
+            
+            return f"It is {round(temp)} degrees and {condition} in Dasmariñas."
+        except Exception as e:
+            logger.warning(f"Weather fetch failed: {e}")
+            return "I couldn't get the weather right now."
+    
+    def _start_timer(self, minutes_str):
+        """Start a background timer."""
+        try:
+            import re
+            match = re.search(r'(\d+)', minutes_str)
+            if match:
+                minutes = int(match.group(1))
+                def timer_thread():
+                    time.sleep(minutes * 60)
+                    self.tray.update_state("speaking")
+                    self.voice.speak(f"Your {minutes} minute timer is done!", 
+                                    lambda: self.tray.update_state("listening"))
+                
+                threading.Thread(target=timer_thread, daemon=True).start()
+                self.tray.update_state("speaking")
+                self.voice.speak(f"Timer set for {minutes} minutes.", 
+                                lambda: self.tray.update_state("listening"))
+            else:
+                self.tray.update_state("speaking")
+                self.voice.speak("I couldn't understand the duration.", 
+                                lambda: self.tray.update_state("listening"))
+        except Exception as e:
+            logger.error(f"Timer error: {e}")
+            self.tray.update_state("speaking")
+            self.voice.speak("I couldn't set the timer.", 
+                            lambda: self.tray.update_state("listening"))
+    
     def _execute_command(self, text):
         """
-        Execute command with hardcoded logic (v7.0 Non-Blocking Architecture)
-        Priority: Hardcoded commands first, AI as last resort
+        HARDCODED-FIRST COMMAND PROCESSING (v7.0 Non-Blocking Architecture)
+        Priority: Media > System > Apps > Utilities > AI Brain
+        This runs in a background thread, not blocking the listen loop.
         """
         text_lower = text.lower()
         
@@ -702,98 +774,49 @@ class LinnyApp:
         if not any(wake in text_lower for wake in wake_words):
             return
         
-        logger.info(f"💬 Command: {text}")
+        logger.info(f"💬 Command received: {text}")
         
         # ========================================================================
-        # HARDCODED COMMANDS - No AI, No Token Waste
+        # PRIORITY 1: MEDIA CONTROLS (HIGH PRIORITY - NO AI WASTE)
         # ========================================================================
         
-        # System Commands
-        if any(word in text_lower for word in ["shutdown", "shut down"]):
-            logger.info("⚡ System: Shutdown")
-            self.tray.update_state("speaking")
-            self.voice.speak("Shutting down the system.", lambda: self.tray.update_state("listening"))
-            threading.Timer(3.0, lambda: os.system("shutdown /s /t 1")).start()
-            return
-        
-        if "restart" in text_lower and ("computer" in text_lower or "pc" in text_lower or "system" in text_lower):
-            logger.info("⚡ System: Restart")
-            self.tray.update_state("speaking")
-            self.voice.speak("Restarting the system.", lambda: self.tray.update_state("listening"))
-            threading.Timer(3.0, lambda: os.system("shutdown /r /t 1")).start()
-            return
-        
-        if "lock" in text_lower and ("computer" in text_lower or "pc" in text_lower or "workstation" in text_lower):
-            logger.info("🔒 System: Lock")
-            self.tray.update_state("speaking")
-            self.voice.speak("Locking your workstation.", lambda: self.tray.update_state("listening"))
-            threading.Timer(2.0, lambda: ctypes.windll.user32.LockWorkStation()).start()
-            return
-        
-        # Time/Date Commands
-        if any(word in text_lower for word in ["what time", "time is it", "current time", "oras", "anong oras"]):
-            logger.info("🕐 Time Query")
-            now = datetime.now(pytz.timezone(self.config.get("timezone", "Asia/Manila")))
-            time_str = now.strftime("%I:%M %p")
-            self.tray.update_state("speaking")
-            self.voice.speak(f"It's {time_str}.", lambda: self.tray.update_state("listening"))
-            return
-        
-        if any(word in text_lower for word in ["what date", "date today", "current date", "what day", "day today"]):
-            logger.info("📅 Date Query")
-            now = datetime.now(pytz.timezone(self.config.get("timezone", "Asia/Manila")))
-            date_str = now.strftime("%A, %B %d, %Y")
-            self.tray.update_state("speaking")
-            self.voice.speak(f"Today is {date_str}.", lambda: self.tray.update_state("listening"))
-            return
-        
-        # Media Controls - Extended
-        if any(word in text_lower for word in ["next song", "next track", "skip", "skip song"]):
-            logger.info("⏭️ Media: Next Track")
-            try:
-                import pyautogui
-                pyautogui.press("nexttrack")
-                self.tray.update_state("speaking")
-                self.voice.speak("Next track.", lambda: self.tray.update_state("listening"))
-            except Exception as e:
-                logger.error(f"Media control error: {e}")
-            return
-        
-        if any(word in text_lower for word in ["previous song", "previous track", "go back", "last song"]):
-            logger.info("⏮️ Media: Previous Track")
-            try:
-                import pyautogui
-                pyautogui.press("prevtrack")
-                self.tray.update_state("speaking")
-                self.voice.speak("Previous track.", lambda: self.tray.update_state("listening"))
-            except Exception as e:
-                logger.error(f"Media control error: {e}")
-            return
-        
-        if any(word in text_lower for word in ["stop music", "stop playing", "stop song"]):
-            logger.info("⏹️ Media: Stop")
-            try:
-                import pyautogui
-                pyautogui.press("stopped")
-                self.tray.update_state("speaking")
-                self.voice.speak("Stopped.", lambda: self.tray.update_state("listening"))
-            except Exception as e:
-                logger.error(f"Media control error: {e}")
-            return
-        
-        # Play/Pause/Resume (from v6.4)
-        if any(word in text_lower for word in ["resume", "resume music", "continue", "unpause", "pause", "pause music"]):
-            logger.info("⏯️ Media: Play/Pause")
+        # Resume / Unpause / Continue / Play Music
+        if any(word in text_lower for word in ["resume", "unpause", "continue", "play music"]):
+            logger.info("⏯️ Media: Play/Resume")
             try:
                 import pyautogui
                 pyautogui.press("playpause")
                 self.tray.update_state("speaking")
-                self.voice.speak("Done.", lambda: self.tray.update_state("listening"))
+                self.voice.speak("Playing.", lambda: self.tray.update_state("listening"))
             except Exception as e:
                 logger.error(f"Media control error: {e}")
             return
         
-        # Volume Controls (from v6.4)
+        # Pause / Stop Music
+        if any(word in text_lower for word in ["pause", "stop music"]):
+            logger.info("⏸️ Media: Pause")
+            try:
+                import pyautogui
+                pyautogui.press("playpause")
+                self.tray.update_state("speaking")
+                self.voice.speak("Paused.", lambda: self.tray.update_state("listening"))
+            except Exception as e:
+                logger.error(f"Media control error: {e}")
+            return
+        
+        # Next / Skip
+        if any(word in text_lower for word in ["next", "skip", "next song", "skip song", "next track"]):
+            logger.info("⏭️ Media: Next")
+            try:
+                import pyautogui
+                pyautogui.press("nexttrack")
+                self.tray.update_state("speaking")
+                self.voice.speak("Next.", lambda: self.tray.update_state("listening"))
+            except Exception as e:
+                logger.error(f"Media control error: {e}")
+            return
+        
+        # Volume Up
         if any(word in text_lower for word in ["volume up", "louder", "turn it up", "increase volume"]):
             logger.info("🔊 Media: Volume Up")
             try:
@@ -806,6 +829,7 @@ class LinnyApp:
                 logger.error(f"Media control error: {e}")
             return
         
+        # Volume Down
         if any(word in text_lower for word in ["volume down", "softer", "lower volume", "quieter", "turn it down"]):
             logger.info("🔉 Media: Volume Down")
             try:
@@ -818,7 +842,8 @@ class LinnyApp:
                 logger.error(f"Media control error: {e}")
             return
         
-        if "mute" in text_lower and not ("unmute" in text_lower):
+        # Mute
+        if "mute" in text_lower and "unmute" not in text_lower:
             logger.info("🔇 Media: Mute")
             try:
                 import pyautogui
@@ -829,175 +854,235 @@ class LinnyApp:
                 logger.error(f"Media control error: {e}")
             return
         
-        # Calendar Commands
-        if any(word in text_lower for word in ["schedule", "calendar", "ano schedule", "what's my schedule", "agenda", "events"]):
-            logger.info("📅 Calendar Query")
-            schedule = self.calendar.get_smart_schedule()
-            self.voice.speak(schedule, lambda: self.tray.update_state("listening"))
+        # ========================================================================
+        # PRIORITY 2: SYSTEM COMMANDS
+        # ========================================================================
+        
+        if any(word in text_lower for word in ["shutdown", "shut down"]):
+            logger.info("⚡ System: Shutdown")
             self.tray.update_state("speaking")
+            self.voice.speak("Shutting down the system.", lambda: self.tray.update_state("listening"))
+            threading.Timer(3.0, lambda: os.system("shutdown /s /t 0")).start()
             return
         
-        # Music Player - YouTube (from v6.3)
-        if "play" in text_lower and not any(word in text_lower for word in ["pause", "resume"]):
+        if "lock" in text_lower and any(word in text_lower for word in ["computer", "pc", "workstation"]):
+            logger.info("🔒 System: Lock")
+            self.tray.update_state("speaking")
+            self.voice.speak("Locking your workstation.", lambda: self.tray.update_state("listening"))
+            threading.Timer(1.0, lambda: ctypes.windll.user32.LockWorkStation()).start()
+            return
+        
+        # ========================================================================
+        # PRIORITY 3: APP LAUNCHER (SMART, NO AI)
+        # ========================================================================
+        
+        app_name = None
+        for verb in ["open", "launch", "start"]:
+            if verb in text_lower:
+                parts = text_lower.split(verb, 1)
+                if len(parts) > 1:
+                    app_name = parts[1].strip()
+                    break
+        
+        if app_name:
+            for wake_word in wake_words:
+                app_name = app_name.replace(wake_word, "").strip()
+            
+            logger.info(f"🚀 Launching app: {app_name}")
+            app_aliases = self.config.get("app_aliases", {})
+            command = app_aliases.get(app_name)
+            
+            try:
+                if command:
+                    os.startfile(command)
+                    logger.info(f"✓ Launched {app_name} via alias")
+                else:
+                    os.startfile(app_name)
+                    logger.info(f"✓ Launched {app_name} directly")
+                
+                self.tray.update_state("speaking")
+                self.voice.speak(f"Opening {app_name}.", lambda: self.tray.update_state("listening"))
+            except FileNotFoundError:
+                logger.warning(f"App not found: {app_name}")
+                self.tray.update_state("speaking")
+                self.voice.speak(f"I couldn't find {app_name}.", lambda: self.tray.update_state("listening"))
+            except Exception as e:
+                logger.error(f"Failed to launch {app_name}: {e}")
+                self.tray.update_state("speaking")
+                self.voice.speak("I couldn't open that application.", lambda: self.tray.update_state("listening"))
+            return
+        
+        # ========================================================================
+        # PRIORITY 4: UTILITIES (TIME, CALENDAR, WEATHER, TIMER)
+        # ========================================================================
+        
+        # Time Query
+        if any(word in text_lower for word in ["time", "oras"]):
+            logger.info("🕐 Time")
+            now = datetime.now(pytz.timezone(self.config.get("timezone", "Asia/Manila")))
+            time_str = now.strftime("%I:%M %p")
+            self.tray.update_state("speaking")
+            self.voice.speak(f"It is {time_str}.", lambda: self.tray.update_state("listening"))
+            return
+        
+        # Calendar / Schedule
+        if any(word in text_lower for word in ["schedule", "calendar", "agenda", "events"]):
+            logger.info("📅 Schedule")
+            schedule = self.calendar.get_smart_schedule()
+            self.tray.update_state("speaking")
+            self.voice.speak(schedule, lambda: self.tray.update_state("listening"))
+            return
+        
+        # Weather
+        if any(word in text_lower for word in ["weather", "panahon"]):
+            logger.info("🌤️ Weather")
+            weather = self._get_weather()
+            self.tray.update_state("speaking")
+            self.voice.speak(weather, lambda: self.tray.update_state("listening"))
+            return
+        
+        # Timer
+        if "timer" in text_lower:
+            logger.info("⏱️ Timer")
+            self._start_timer(text_lower)
+            return
+        
+        # Play on YouTube (Special case, not AI)
+        if "play" in text_lower:
             song_name = text_lower
             for wake_word in wake_words:
                 song_name = song_name.replace(wake_word, "")
             song_name = song_name.replace("play", "").strip()
             song_name = song_name.replace("on youtube", "").strip()
-            song_name = song_name.replace("please", "").strip()
             
-            if song_name:
-                logger.info(f"🎵 Playing on YouTube: {song_name}")
+            if song_name and len(song_name) > 2:
+                logger.info(f"🎵 YouTube: {song_name}")
                 try:
                     pywhatkit.playonyt(song_name)
                     self.tray.update_state("speaking")
-                    self.voice.speak(f"Playing {song_name} on YouTube.", lambda: self.tray.update_state("listening"))
-                    return
+                    self.voice.speak(f"Playing {song_name}.", lambda: self.tray.update_state("listening"))
                 except Exception as e:
-                    logger.error(f"YouTube playback error: {e}")
+                    logger.error(f"YouTube error: {e}")
                     self.tray.update_state("speaking")
-                    self.voice.speak("I couldn't play that on YouTube.", lambda: self.tray.update_state("listening"))
-                    return
-        
-        # App Launcher (from v6.1)
-        if "open" in text_lower or "launch" in text_lower or "start" in text_lower:
-            app_name = None
-            if "open" in text_lower:
-                parts = text_lower.split("open", 1)
-                if len(parts) > 1:
-                    app_name = parts[1].strip()
-            elif "launch" in text_lower:
-                parts = text_lower.split("launch", 1)
-                if len(parts) > 1:
-                    app_name = parts[1].strip()
-            elif "start" in text_lower:
-                parts = text_lower.split("start", 1)
-                if len(parts) > 1:
-                    app_name = parts[1].strip()
-            
-            if app_name:
-                for wake_word in wake_words:
-                    app_name = app_name.replace(wake_word, "").strip()
-                
-                logger.info(f"🚀 Launching app: {app_name}")
-                
-                app_aliases = self.config.get("app_aliases", {})
-                command = app_aliases.get(app_name)
-                
-                success = False
-                
-                try:
-                    if command:
-                        os.startfile(command)
-                        success = True
-                        logger.info(f"✓ Launched {app_name} via alias: {command}")
-                    else:
-                        os.startfile(app_name)
-                        success = True
-                        logger.info(f"✓ Launched {app_name} directly")
-                        
-                except FileNotFoundError as e:
-                    logger.warning(f"File not found: {app_name} - {e}")
-                    success = False
-                except OSError as e:
-                    logger.error(f"OS error when launching {app_name}: {e}")
-                    success = False
-                except Exception as e:
-                    logger.error(f"Unexpected error launching {app_name}: {e}")
-                    success = False
-                
-                if success:
-                    self.tray.update_state("speaking")
-                    self.voice.speak(f"Opening {app_name}.", lambda: self.tray.update_state("listening"))
-                else:
-                    self.tray.update_state("speaking")
-                    self.voice.speak("I couldn't find that application.", lambda: self.tray.update_state("listening"))
-                
+                    self.voice.speak("I couldn't play that.", lambda: self.tray.update_state("listening"))
                 return
         
-        # Weather Command
-        if any(word in text_lower for word in ["weather", "panahon", "temperature", "forecast"]):
-            logger.info("🌤️ Weather Query")
-            self.tray.update_state("speaking")
-            self.voice.speak("I don't have weather data configured yet. Please check your weather app.", lambda: self.tray.update_state("listening"))
-            return
+        # ========================================================================
+        # PRIORITY 5: AI BRAIN (FALLBACK ONLY)
+        # ========================================================================
         
-        # ========================================================================
-        # AI QUERY - Last Resort Only
-        # ========================================================================
-        logger.info("🤖 Falling back to AI Brain...")
+        logger.info("🤖 Fallback to AI Brain")
         response = self.brain.ask(
             text,
             user_name=self.config.get("user_name", "User"),
             language=self.config.get("language", "English")
         )
-        
         self.tray.update_state("speaking")
         self.voice.speak(response, lambda: self.tray.update_state("listening"))
     
     def _listen_loop(self):
-        """Non-blocking listening loop (v7.0) - Spawns threads for command execution"""
-        logger.info("🎤 Listening started...")
-        
-        with self.microphone as source:
-            self.recognizer.adjust_for_ambient_noise(source, duration=1)
-        
+        """Robust non-blocking listening loop - persistent audio source, immediate thread dispatch."""
+        logger.info("🎤 Listening started (robust mode)...")
+        source = self._audio_source
         cycle_count = 0
         
         while self.is_listening:
             try:
-                # Skip if muted or speaking
-                if self.is_muted or self.voice.is_speaking:
+                # Quick skip if muted (don't block, small sleep to avoid spin)
+                if self.is_muted:
+                    time.sleep(0.05)
                     continue
                 
-                # Memory optimization - garbage collect every 100 cycles
+                # Memory optimization
                 cycle_count += 1
                 if cycle_count % 100 == 0:
                     gc.collect()
-                    logger.debug(f"🧹 Memory cleanup at cycle {cycle_count}")
+                    logger.debug(f"🧹 Cycle {cycle_count}")
+                
+                if source is None:
+                    logger.warning("Audio source lost, attempting to re-open...")
+                    try:
+                        source = self.microphone.__enter__()
+                        self._audio_source = source
+                        self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                    except Exception as e:
+                        logger.error(f"Could not re-open audio: {e}")
+                        time.sleep(1)
+                        continue
                 
                 try:
-                    with self.microphone as source:
-                        audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=10)
-                    
-                    text = self.recognizer.recognize_google(audio)
-                    
-                    # NON-BLOCKING: Spawn thread for command execution
-                    threading.Thread(
-                        target=self._execute_command,
-                        args=(text,),
-                        daemon=True
-                    ).start()
-                    
-                    # Loop continues immediately - no blocking!
+                    # Capture audio (timeout: don't wait forever)
+                    logger.debug("⏺️ Listening for audio...")
+                    audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=8)
+                    logger.debug("✅ Audio captured")
                     
                 except sr.WaitTimeoutError:
+                    logger.debug("⏳ Timeout (no speech)")
                     continue
                 except sr.UnknownValueError:
+                    logger.debug("🔇 Could not understand")
                     continue
                 except sr.RequestError as e:
-                    logger.error(f"Speech recognition service error: {e}")
+                    logger.warning(f"Recognition error: {e}")
+                    continue
+                except Exception as e:
+                    logger.exception(f"Audio capture error: {e}")
+                    time.sleep(0.5)
+                    continue
+                
+                # Recognize speech (in background thread to avoid blocking loop)
+                try:
+                    logger.debug("🔄 Recognizing...")
+                    text = self.recognizer.recognize_google(audio)
+                    logger.info(f"✨ Recognized: {text}")
+                    
+                    # FIRE-AND-FORGET: Spawn command thread, loop resumes immediately
+                    self._command_executor.submit(self._execute_command, text)
+                    logger.debug("→ Command thread dispatched")
+                    
+                except sr.UnknownValueError:
+                    logger.debug("🔇 No recognizable speech")
+                    continue
+                except sr.RequestError as e:
+                    logger.warning(f"Recognition service error: {e}")
+                    time.sleep(1)
+                    continue
+                except Exception as e:
+                    logger.exception(f"Recognition error: {e}")
                     continue
                     
             except Exception as e:
-                # IMMORTAL LOOP - Never let errors kill the listening thread
-                logger.error(f"[ERROR] Crash in listen loop: {e}")
-                logger.error(f"Stack trace: ", exc_info=True)
-                
-                # Notify user but keep running
+                # IMMORTAL LOOP: catch-all, log, continue
+                logger.exception(f"[LISTEN LOOP ERROR] {e}")
                 try:
                     self.tray.update_state("speaking")
                     self.voice.speak("I encountered a glitch, but I'm back online.", 
                                     lambda: self.tray.update_state("listening"))
-                except:
-                    pass  # Even if speech fails, keep listening
-                
-                # Continue the loop - DO NOT BREAK
+                except Exception:
+                    pass
+                time.sleep(0.5)
                 continue
     
     def _start_listening(self):
-        """Start listening thread"""
+        """Start listening: open mic once, calibrate once, spawn daemon thread."""
         if not self.is_listening:
+            # Open audio source once (persistent)
+            try:
+                self._audio_source = self.microphone.__enter__()
+                logger.info("✓ Audio source opened (persistent)")
+                
+                # Calibrate once
+                self.recognizer.adjust_for_ambient_noise(self._audio_source, duration=1)
+                logger.info("✓ Ambient noise calibrated")
+                
+                # Responsive recognizer
+                self.recognizer.pause_threshold = 0.8
+                self.recognizer.dynamic_energy_threshold = False
+                logger.info("✓ Recognizer configured")
+            except Exception as e:
+                logger.warning(f"Audio setup warning: {e}")
+                # Still try to proceed
+            
             self.is_listening = True
             threading.Thread(target=self._listen_loop, daemon=True).start()
             logger.info("✓ Listening thread started")
