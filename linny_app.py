@@ -23,7 +23,6 @@ import logging
 import subprocess
 import webbrowser
 import gc
-import shutil
 import time
 import requests
 import concurrent.futures
@@ -56,10 +55,9 @@ from googleapiclient.discovery import build
 
 # Smart Home
 try:
-    from kasa import SmartBulb, Discover
+    from kasa import SmartBulb
 except ImportError:
     SmartBulb = None
-    Discover = None
 
 # Utilities
 import pytz
@@ -99,7 +97,7 @@ class LightManager:
     """Control Tapo L530E smart bulb via kasa"""
     
     def __init__(self, ip_address=None):
-        self.ip = ip_address or "192.168.1.100"
+        self.ip = ip_address or "<BULB_IP>"
         self.bulb = None
         self._connect()
     
@@ -1029,14 +1027,14 @@ class LinnyApp:
         # Minimal fallback if file doesn't exist
         return {
             "language": "English",
-            "timezone": "Asia/Manila",
+            "timezone": "UTC",
             "user_name": "User",
             "voice_en": "en-US-AriaNeural",
             "voice_tl": "en-US-AriaNeural",
             "groq_api_key": "",
             "gemini_api_key": "",
             "perplexity_api_key": "",
-            "smart_bulb_ip": "192.168.1.100",
+            "smart_bulb_ip": "<BULB_IP>",
             "app_aliases": {}
         }
     
@@ -1105,7 +1103,7 @@ class LinnyApp:
         # Smart Bulb IP
         ctk.CTkLabel(settings_frame, text="Smart Bulb IP:").grid(row=3, column=0, sticky="w", padx=10, pady=5)
         self.bulb_ip_entry = ctk.CTkEntry(settings_frame, width=300)
-        self.bulb_ip_entry.insert(0, self.config.get("smart_bulb_ip", "192.168.1.100"))
+        self.bulb_ip_entry.insert(0, self.config.get("smart_bulb_ip", "<BULB_IP>"))
         self.bulb_ip_entry.grid(row=3, column=1, padx=10, pady=5)
         
         # API Keys
