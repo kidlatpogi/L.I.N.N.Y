@@ -1,6 +1,6 @@
 """
-L.I.N.N.Y. v7.0 - Loyal Intelligent Neural Network for You
-Non-Blocking Architecture with Hardcoded Command Processing
+L.I.N.N.Y. v8.0 - Loyal Intelligent Neural Network for You
+Complete Rewrite: Strict Class Separation, Hardcoded-First, Non-Blocking
 """
 
 import os
@@ -17,6 +17,7 @@ import shutil
 import time
 import requests
 import concurrent.futures
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 import ctypes
@@ -31,6 +32,7 @@ import psutil
 import speech_recognition as sr
 import edge_tts
 import pygame
+import pyautogui
 
 # AI Providers
 import groq
@@ -49,57 +51,52 @@ from dateutil import parser as date_parser
 import pywhatkit
 
 # ============================================================================
-# LOGGING CONFIGURATION
+# LOGGING
 # ============================================================================
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("LINNY")
 
 # ============================================================================
-# CONSTANTS & CONFIGURATION
+# CONSTANTS
 # ============================================================================
 CONFIG_FILE = Path.home() / ".linny" / "linny_config.json"
 TOKEN_FILE = Path.home() / ".linny" / "token.json"
 CREDENTIALS_FILE = Path("credentials.json")
-
 CALENDAR_SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 
 # ============================================================================
-# BRAIN MANAGER - Cascading AI Architecture
+# BRAIN MANAGER - Cascading AI
 # ============================================================================
 class BrainManager:
-    """Manages multiple AI providers with intelligent fallback logic"""
+    """Cascading AI with Groq -> Gemini -> Perplexity fallback"""
     
     def __init__(self, config):
         self.config = config
         self.groq_client = None
         self.gemini_model = None
         self.perplexity_client = None
-        
-        self._initialize_providers()
+        self._init_providers()
     
-    def _initialize_providers(self):
+    def _init_providers(self):
         """Initialize all AI providers"""
-        # Groq (Primary - Speed)
         if self.config.get("groq_api_key"):
             try:
                 self.groq_client = groq.Groq(api_key=self.config["groq_api_key"])
                 logger.info("✓ Groq initialized")
             except Exception as e:
-                logger.warning(f"Groq initialization failed: {e}")
+                logger.warning(f"Groq failed: {e}")
         
-        # Gemini (Fallback)
         if self.config.get("gemini_api_key"):
             try:
                 genai.configure(api_key=self.config["gemini_api_key"])
                 self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
                 logger.info("✓ Gemini initialized")
             except Exception as e:
-                logger.warning(f"Gemini initialization failed: {e}")
+                logger.warning(f"Gemini failed: {e}")
         
-        # Perplexity (Search & Final Fallback)
         if self.config.get("perplexity_api_key"):
             try:
                 self.perplexity_client = OpenAI(
@@ -108,127 +105,81 @@ class BrainManager:
                 )
                 logger.info("✓ Perplexity initialized")
             except Exception as e:
-                logger.warning(f"Perplexity initialization failed: {e}")
+                logger.warning(f"Perplexity failed: {e}")
     
-    def _is_search_intent(self, query):
-        """Detect if query requires web search"""
-        search_keywords = ["search", "price", "news", "weather", "who won", 
-                          "latest", "current", "today's", "what happened"]
-        query_lower = query.lower()
-        return any(keyword in query_lower for keyword in search_keywords)
-    
-    def _call_groq(self, query, system_prompt):
-        """Call Groq API"""
-        if not self.groq_client:
-            return None
-        
-        try:
-            response = self.groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": query}
-                ],
-                temperature=0.7,
-                max_tokens=500
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.warning(f"Groq failed: {e}")
-            return None
-    
-    def _call_gemini(self, query, system_prompt):
-        """Call Gemini API"""
-        if not self.gemini_model:
-            return None
-        
-        try:
-            full_prompt = f"{system_prompt}\n\nUser: {query}"
-            response = self.gemini_model.generate_content(full_prompt)
-            return response.text
-        except Exception as e:
-            logger.warning(f"Gemini failed: {e}")
-            return None
-    
-    def _call_perplexity(self, query, system_prompt):
-        """Call Perplexity API"""
-        if not self.perplexity_client:
-            return None
-        
-        try:
-            response = self.perplexity_client.chat.completions.create(
-                model="llama-3.1-sonar-small-128k-online",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": query}
-                ]
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.warning(f"Perplexity failed: {e}")
-            return None
+    def _is_search(self, query):
+        """Detect search intent"""
+        keywords = ["search", "price", "news", "weather", "latest", "who"]
+        return any(k in query.lower() for k in keywords)
     
     def ask(self, query, user_name="User", language="English"):
-        """
-        Cascading Brain Logic:
-        1. If search intent -> Try Perplexity first
-        2. Try Groq (speed)
-        3. Try Gemini (fallback)
-        4. Try Perplexity (final fallback)
-        5. Return offline message
-        """
-        system_prompt = f"You are Linny, a loyal AI assistant. User: {user_name}. Language: {language}. Be brief and friendly."
+        """Cascading ask: Perplexity (search) -> Groq -> Gemini -> Perplexity"""
+        system = f"You are Linny, a helpful AI. User: {user_name}. Language: {language}. Be concise."
         
-        is_search = self._is_search_intent(query)
+        is_search = self._is_search(query)
         
-        # Step 1: Search Intent - Try Perplexity first
-        if is_search:
-            logger.info("🔍 Search intent detected, trying Perplexity first...")
-            result = self._call_perplexity(query, system_prompt)
-            if result:
+        # Search intent -> Try Perplexity first
+        if is_search and self.perplexity_client:
+            try:
+                response = self.perplexity_client.chat.completions.create(
+                    model="llama-3.1-sonar-small-128k-online",
+                    messages=[{"role": "system", "content": system}, {"role": "user", "content": query}]
+                )
                 logger.info("✓ Perplexity (search) responded")
-                return result
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.warning(f"Perplexity failed: {e}")
         
-        # Step 2: Speed - Try Groq
-        logger.info("⚡ Trying Groq...")
-        result = self._call_groq(query, system_prompt)
-        if result:
-            logger.info("✓ Groq responded")
-            return result
+        # Try Groq
+        if self.groq_client:
+            try:
+                response = self.groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "system", "content": system}, {"role": "user", "content": query}],
+                    temperature=0.7, max_tokens=500
+                )
+                logger.info("✓ Groq responded")
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.warning(f"Groq failed: {e}")
         
-        # Step 3: Fallback - Try Gemini
-        logger.info("🔄 Trying Gemini...")
-        result = self._call_gemini(query, system_prompt)
-        if result:
-            logger.info("✓ Gemini responded")
-            return result
+        # Try Gemini
+        if self.gemini_model:
+            try:
+                response = self.gemini_model.generate_content(f"{system}\n\nUser: {query}")
+                logger.info("✓ Gemini responded")
+                return response.text
+            except Exception as e:
+                logger.warning(f"Gemini failed: {e}")
         
-        # Step 4: Final Fallback - Try Perplexity (if not already tried)
-        if not is_search:
-            logger.info("🔄 Final fallback to Perplexity...")
-            result = self._call_perplexity(query, system_prompt)
-            if result:
+        # Perplexity fallback
+        if not is_search and self.perplexity_client:
+            try:
+                response = self.perplexity_client.chat.completions.create(
+                    model="llama-3.1-sonar-small-128k-online",
+                    messages=[{"role": "system", "content": system}, {"role": "user", "content": query}]
+                )
                 logger.info("✓ Perplexity (fallback) responded")
-                return result
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.warning(f"Perplexity failed: {e}")
         
-        # Step 5: All systems offline
-        logger.error("❌ All AI systems offline")
-        return "I'm sorry, all my systems are currently offline. Please check your API keys and internet connection."
+        return "All AI systems are offline. Please check your API keys."
 
 # ============================================================================
-# GOOGLE CALENDAR MANAGER - Smart Schedule v2
+# CALENDAR MANAGER
 # ============================================================================
-class GoogleCalendarManager:
-    """Manages Google Calendar with Smart Schedule v2: Time filtering, end times, ongoing detection"""
+class CalendarManager:
+    """Google Calendar with smart schedule filtering"""
     
     def __init__(self, timezone="Asia/Manila"):
         self.service = None
         self.timezone = pytz.timezone(timezone)
-        self.school_calendar_id = None
-        self._authenticate()
+        self.school_cal_id = None
+        self._auth()
     
-    def _authenticate(self):
-        """Authenticate with Google Calendar API"""
+    def _auth(self):
+        """Authenticate with Google Calendar"""
         creds = None
         
         if TOKEN_FILE.exists():
@@ -238,64 +189,48 @@ class GoogleCalendarManager:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             elif CREDENTIALS_FILE.exists():
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    str(CREDENTIALS_FILE), CALENDAR_SCOPES
-                )
+                flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_FILE), CALENDAR_SCOPES)
                 creds = flow.run_local_server(port=0)
             else:
-                logger.warning("No credentials.json found. Calendar disabled.")
+                logger.warning("credentials.json not found. Calendar disabled.")
                 return
             
             TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(TOKEN_FILE, 'w') as token:
-                token.write(creds.to_json())
+            with open(TOKEN_FILE, 'w') as f:
+                f.write(creds.to_json())
         
         self.service = build('calendar', 'v3', credentials=creds)
         logger.info("✓ Google Calendar authenticated")
-        
-        # Find "School" calendar
-        self._find_school_calendar()
+        self._find_school_cal()
     
-    def _find_school_calendar(self):
-        """Find the 'School' calendar ID"""
+    def _find_school_cal(self):
+        """Find School calendar"""
         if not self.service:
             return
-        
         try:
-            calendar_list = self.service.calendarList().list().execute()
-            for calendar in calendar_list.get('items', []):
-                if calendar.get('summary', '').lower() == 'school':
-                    self.school_calendar_id = calendar['id']
-                    logger.info(f"✓ Found 'School' calendar: {self.school_calendar_id}")
+            cals = self.service.calendarList().list().execute()
+            for cal in cals.get('items', []):
+                if cal.get('summary', '').lower() == 'school':
+                    self.school_cal_id = cal['id']
+                    logger.info(f"✓ School calendar: {self.school_cal_id}")
                     return
-            
-            logger.info("'School' calendar not found, using primary")
         except Exception as e:
-            logger.warning(f"Could not search for School calendar: {e}")
+            logger.warning(f"Could not find School calendar: {e}")
     
-    def get_smart_schedule(self):
-        """
-        Smart Schedule v2:
-        1. Use "School" calendar if found, else 'primary'
-        2. Fetch today's events
-        3. Filter: Discard if end_time < now, Mark as "Ongoing" if start < now < end
-        4. Format with end times: "Event from X to Y"
-        5. Auto-switch to tomorrow if today is empty
-        """
+    def get_schedule(self):
+        """Get today's schedule with smart filtering"""
         if not self.service:
-            return "Calendar is not configured."
+            return "Calendar not configured."
         
         try:
             now = datetime.now(self.timezone)
             today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
             today_end = today_start + timedelta(days=1)
             
-            # Use School calendar or primary
-            calendar_id = self.school_calendar_id or 'primary'
+            cal_id = self.school_cal_id or 'primary'
             
-            # Fetch today's events
             events_result = self.service.events().list(
-                calendarId=calendar_id,
+                calendarId=cal_id,
                 timeMin=today_start.isoformat(),
                 timeMax=today_end.isoformat(),
                 singleEvents=True,
@@ -304,93 +239,51 @@ class GoogleCalendarManager:
             
             events = events_result.get('items', [])
             
-            # Smart Time Filtering with Ongoing Detection
-            upcoming_events = []
-            ongoing_events = []
+            ongoing = []
+            upcoming = []
             
             for event in events:
-                # Parse start and end times
-                start_time_str = event['start'].get('dateTime', event['start'].get('date'))
-                end_time_str = event['end'].get('dateTime', event['end'].get('date'))
+                start_str = event['start'].get('dateTime', event['start'].get('date'))
+                end_str = event['end'].get('dateTime', event['end'].get('date'))
                 
-                start_time = date_parser.parse(start_time_str)
-                end_time = date_parser.parse(end_time_str)
+                start_t = date_parser.parse(start_str)
+                end_t = date_parser.parse(end_str)
                 
-                # Ensure timezone awareness
-                if start_time.tzinfo is None:
-                    start_time = self.timezone.localize(start_time)
-                if end_time.tzinfo is None:
-                    end_time = self.timezone.localize(end_time)
+                if start_t.tzinfo is None:
+                    start_t = self.timezone.localize(start_t)
+                if end_t.tzinfo is None:
+                    end_t = self.timezone.localize(end_t)
                 
-                # Filter logic
-                if end_time < now:
-                    # Event is finished - DISCARD
+                if end_t < now:
                     continue
-                elif start_time < now < end_time:
-                    # Event is ongoing
-                    ongoing_events.append((event, start_time, end_time))
+                elif start_t < now < end_t:
+                    ongoing.append((event, start_t, end_t))
                 else:
-                    # Event is upcoming
-                    upcoming_events.append((event, start_time, end_time))
+                    upcoming.append((event, start_t, end_t))
             
-            # Combine ongoing + upcoming
-            all_active_events = ongoing_events + upcoming_events
+            active = ongoing + upcoming
             
-            # If no active events today, fetch tomorrow
-            if not all_active_events:
-                logger.info("No more schedule for today, fetching tomorrow...")
-                tomorrow_start = today_end
-                tomorrow_end = tomorrow_start + timedelta(days=1)
-                
-                events_result = self.service.events().list(
-                    calendarId=calendar_id,
-                    timeMin=tomorrow_start.isoformat(),
-                    timeMax=tomorrow_end.isoformat(),
-                    singleEvents=True,
-                    orderBy='startTime'
-                ).execute()
-                
-                tomorrow_events = events_result.get('items', [])
-                
-                if not tomorrow_events:
-                    return "You have no more schedule for today. You have no events tomorrow either."
-                
-                # Format tomorrow's events with end times
-                summary = f"You have no more schedule for today. For tomorrow, you have {len(tomorrow_events)} event{'s' if len(tomorrow_events) > 1 else ''}:\n"
-                for event in tomorrow_events[:5]:
-                    start_str = event['start'].get('dateTime', event['start'].get('date'))
-                    end_str = event['end'].get('dateTime', event['end'].get('date'))
-                    
-                    start_t = date_parser.parse(start_str)
-                    end_t = date_parser.parse(end_str)
-                    
-                    summary += f"- {event.get('summary', 'Untitled')} from {start_t.strftime('%I:%M %p')} to {end_t.strftime('%I:%M %p')}\n"
-                
-                return summary.strip()
+            if not active:
+                return "You have no more schedule for today."
             
-            # Format today's active events with end times
-            summary = f"You have {len(all_active_events)} event{'s' if len(all_active_events) > 1 else ''} remaining today:\n"
-            
-            for event, start_t, end_t in all_active_events[:5]:
-                event_name = event.get('summary', 'Untitled')
-                
-                # Check if ongoing
+            summary = f"You have {len(active)} event(s) remaining:\n"
+            for event, start_t, end_t in active[:5]:
+                name = event.get('summary', 'Untitled')
                 if start_t < now < end_t:
-                    summary += f"- {event_name} (Ongoing, ends at {end_t.strftime('%I:%M %p')})\n"
+                    summary += f"- {name} (Ongoing, ends {end_t.strftime('%I:%M %p')})\n"
                 else:
-                    summary += f"- {event_name} from {start_t.strftime('%I:%M %p')} to {end_t.strftime('%I:%M %p')}\n"
+                    summary += f"- {name} ({start_t.strftime('%I:%M %p')} to {end_t.strftime('%I:%M %p')})\n"
             
             return summary.strip()
-        
         except Exception as e:
             logger.error(f"Calendar error: {e}")
-            return "I couldn't access your calendar right now."
+            return "Could not access calendar."
 
 # ============================================================================
-# VOICE ENGINE - Edge TTS + Pygame
+# VOICE ENGINE - TTS Only
 # ============================================================================
 class VoiceEngine:
-    """Handles TTS with Edge TTS and Pygame playback"""
+    """Handles TTS with Edge TTS + Pygame playback. Manages is_speaking flag."""
     
     def __init__(self, voice="en-PH-RosaNeural"):
         self.voice = voice
@@ -398,13 +291,11 @@ class VoiceEngine:
         self.is_speaking = False
     
     def speak(self, text, callback=None):
-        """Speak text asynchronously - CRITICAL: is_speaking MUST be True before TTS starts"""
-        def _speak_thread():
+        """Speak text asynchronously - is_speaking flag MUST be True before TTS"""
+        def _thread():
             try:
-                # CRITICAL: Set is_speaking=True BEFORE any TTS generation
-                # This ensures the listening loop knows NOT to capture audio
                 self.is_speaking = True
-                logger.debug("🔒 Audio locked (is_speaking=True)")
+                logger.debug("🔒 TTS locked")
                 
                 # Generate TTS
                 temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
@@ -413,31 +304,28 @@ class VoiceEngine:
                 
                 asyncio.run(edge_tts.Communicate(text, self.voice).save(temp_path))
                 
-                # Play with pygame
+                # Play
                 pygame.mixer.music.load(temp_path)
                 pygame.mixer.music.play()
                 logger.debug("▶️ Playback started")
                 
-                # CRITICAL: Keep is_speaking=True until audio playback is COMPLETELY done
+                # Wait until done
                 while pygame.mixer.music.get_busy():
                     pygame.time.Clock().tick(10)
                 
-                logger.debug("⏹️ Playback finished")
-                
-                # Cleanup
                 pygame.mixer.music.unload()
                 os.unlink(temp_path)
+                logger.debug("⏹️ Playback finished")
                 
             except Exception as e:
                 logger.error(f"TTS error: {e}")
             finally:
-                # CRITICAL: Only set is_speaking=False AFTER audio is completely done
                 self.is_speaking = False
-                logger.debug("🔓 Audio unlocked (is_speaking=False)")
+                logger.debug("🔓 TTS unlocked")
                 if callback:
                     callback()
         
-        threading.Thread(target=_speak_thread, daemon=True).start()
+        threading.Thread(target=_thread, daemon=True).start()
     
     def set_voice(self, voice):
         """Change voice"""
@@ -447,81 +335,437 @@ class VoiceEngine:
 # SYSTEM TRAY MANAGER
 # ============================================================================
 class TrayManager:
-    """Manages system tray icon with status indicators"""
+    """System tray icon with state colors"""
     
-    def __init__(self, on_show_dashboard, on_toggle_mute, on_exit):
+    def __init__(self, on_show, on_mute, on_exit):
         self.icon = None
-        self.on_show_dashboard = on_show_dashboard
-        self.on_toggle_mute = on_toggle_mute
+        self.on_show = on_show
+        self.on_mute = on_mute
         self.on_exit = on_exit
-        self.current_state = "listening"
+        self.state = "listening"
     
-    def _create_icon_image(self, color):
-        """Create colored circle icon"""
+    def _img(self, color):
+        """Create colored circle"""
         img = Image.new('RGB', (64, 64), color='white')
         draw = ImageDraw.Draw(img)
         draw.ellipse([8, 8, 56, 56], fill=color)
         return img
     
-    def _create_menu(self):
+    def _menu(self):
         """Create tray menu"""
         return pystray.Menu(
-            pystray.MenuItem("Show Dashboard", self.on_show_dashboard),
-            pystray.MenuItem("Toggle Mute", self.on_toggle_mute),
+            pystray.MenuItem("Show Dashboard", self.on_show),
+            pystray.MenuItem("Toggle Mute", self.on_mute),
             pystray.MenuItem("Exit", self.on_exit)
         )
     
     def start(self):
-        """Start tray icon"""
-        image = self._create_icon_image('green')
-        self.icon = pystray.Icon("LINNY", image, "L.I.N.N.Y. v6.1", self._create_menu())
+        """Start tray"""
+        img = self._img('green')
+        self.icon = pystray.Icon("LINNY", img, "L.I.N.N.Y. v8.0", self._menu())
         threading.Thread(target=self.icon.run, daemon=True).start()
-        logger.info("✓ System tray started")
+        logger.info("✓ Tray started")
     
     def update_state(self, state):
-        """Update icon color based on state"""
-        self.current_state = state
-        
+        """Update icon color"""
+        self.state = state
         if self.icon:
-            color_map = {
-                "listening": "green",
-                "speaking": "blue",
-                "muted": "red"
-            }
-            color = color_map.get(state, "gray")
-            self.icon.icon = self._create_icon_image(color)
+            colors = {"listening": "green", "speaking": "blue", "muted": "red"}
+            self.icon.icon = self._img(colors.get(state, "gray"))
     
     def stop(self):
-        """Stop tray icon"""
+        """Stop tray"""
         if self.icon:
             self.icon.stop()
 
 # ============================================================================
-# MAIN APPLICATION
+# LINNY ASSISTANT - Logic + Listening (Core Brain)
+# ============================================================================
+class LinnyAssistant:
+    """Handles listening, command processing, and logic"""
+    
+    def __init__(self, config, voice, calendar, brain):
+        self.config = config
+        self.voice = voice
+        self.calendar = calendar
+        self.brain = brain
+        
+        self.is_listening = False
+        self.is_muted = False
+        
+        self.recognizer = sr.Recognizer()
+        self.microphone = sr.Microphone()
+        self._audio_source = None
+        
+        # Command executor for non-blocking execution
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+    
+    def _get_weather(self):
+        """Fetch weather from Open-Meteo"""
+        try:
+            url = "https://api.open-meteo.com/v1/forecast?latitude=14.32&longitude=120.93&current_weather=true&timezone=Asia%2FManila"
+            resp = requests.get(url, timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+            cw = data.get('current_weather') or {}
+            temp = cw.get('temperature')
+            code = cw.get('weathercode')
+            
+            if temp is None:
+                return "I couldn't read the temperature."
+            
+            condition = 'unknown'
+            if code == 0:
+                condition = 'clear'
+            elif code in (1, 2, 3):
+                condition = 'cloudy'
+            elif 45 <= code <= 48:
+                condition = 'foggy'
+            elif 50 <= code <= 67 or 80 <= code <= 86:
+                condition = 'rainy'
+            elif code >= 95:
+                condition = 'thunderstorms'
+            else:
+                condition = 'cloudy'
+            
+            return f"It is {round(temp)} degrees and {condition}."
+        except Exception as e:
+            logger.warning(f"Weather failed: {e}")
+            return "Could not get weather."
+    
+    def _start_timer(self, text):
+        """Start background timer"""
+        try:
+            match = re.search(r'(\d+)', text)
+            if match:
+                minutes = int(match.group(1))
+                def timer():
+                    time.sleep(minutes * 60)
+                    self.voice.speak(f"Your {minutes} minute timer is done!")
+                
+                threading.Thread(target=timer, daemon=True).start()
+                self.voice.speak(f"Timer set for {minutes} minutes.")
+            else:
+                self.voice.speak("I couldn't understand the duration.")
+        except Exception as e:
+            logger.error(f"Timer failed: {e}")
+            self.voice.speak("Timer failed.")
+    
+    def execute_command(self, text):
+        """
+        HARDCODED-FIRST COMMAND EXECUTION
+        Priority: System > Media > Apps > Time > Calendar > Weather > Clip > AI Brain
+        """
+        text_lower = text.lower()
+        
+        # Wake word check
+        wake_words = ["linny", "lenny", "lini", "mini", "lhinny"]
+        if not any(w in text_lower for w in wake_words):
+            logger.debug(f"No wake word in: {text}")
+            return
+        
+        logger.info(f"💬 Command: {text}")
+        
+        # ====================================================================
+        # PRIORITY 1: SYSTEM COMMANDS
+        # ====================================================================
+        
+        if any(w in text_lower for w in ["shutdown", "shut down"]):
+            logger.info("⚡ System: Shutdown")
+            self.voice.speak("Shutting down the system.")
+            threading.Timer(3.0, lambda: os.system("shutdown /s /t 0")).start()
+            return
+        
+        if "lock" in text_lower and any(w in text_lower for w in ["computer", "pc"]):
+            logger.info("🔒 System: Lock")
+            self.voice.speak("Locking workstation.")
+            threading.Timer(1.0, lambda: ctypes.windll.user32.LockWorkStation()).start()
+            return
+        
+        # ====================================================================
+        # PRIORITY 2: MEDIA CONTROLS
+        # ====================================================================
+        
+        if any(w in text_lower for w in ["resume", "unpause", "continue", "play music"]):
+            logger.info("⏯️ Media: Play")
+            pyautogui.press("playpause")
+            self.voice.speak("Playing.")
+            return
+        
+        if any(w in text_lower for w in ["pause", "stop music"]):
+            logger.info("⏸️ Media: Pause")
+            pyautogui.press("playpause")
+            self.voice.speak("Paused.")
+            return
+        
+        if any(w in text_lower for w in ["next", "skip"]):
+            logger.info("⏭️ Media: Next")
+            pyautogui.press("nexttrack")
+            self.voice.speak("Next.")
+            return
+        
+        if any(w in text_lower for w in ["volume up", "louder"]):
+            logger.info("🔊 Media: Volume Up")
+            for _ in range(2):
+                pyautogui.press("volumeup")
+            self.voice.speak("Volume up.")
+            return
+        
+        if any(w in text_lower for w in ["volume down", "softer"]):
+            logger.info("🔉 Media: Volume Down")
+            for _ in range(2):
+                pyautogui.press("volumedown")
+            self.voice.speak("Volume down.")
+            return
+        
+        if "mute" in text_lower and "unmute" not in text_lower:
+            logger.info("🔇 Media: Mute")
+            pyautogui.press("volumemute")
+            self.voice.speak("Muted.")
+            return
+        
+        # ====================================================================
+        # PRIORITY 3: APP LAUNCHER
+        # ====================================================================
+        
+        app_name = None
+        for verb in ["open", "launch", "start"]:
+            if verb in text_lower:
+                parts = text_lower.split(verb, 1)
+                if len(parts) > 1:
+                    app_name = parts[1].strip()
+                    break
+        
+        if app_name:
+            for wake_word in wake_words:
+                app_name = app_name.replace(wake_word, "").strip()
+            
+            logger.info(f"🚀 App: {app_name}")
+            app_aliases = self.config.get("app_aliases", {})
+            target = app_aliases.get(app_name, app_name)
+            
+            try:
+                subprocess.Popen(
+                    target,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    shell=True
+                )
+                self.voice.speak(f"Opening {app_name}.")
+            except Exception as e:
+                logger.error(f"Failed to launch {app_name}: {e}")
+                self.voice.speak(f"Couldn't find {app_name}.")
+            return
+        
+        # ====================================================================
+        # PRIORITY 4: TIME
+        # ====================================================================
+        
+        if any(w in text_lower for w in ["time", "oras"]):
+            logger.info("🕐 Time")
+            tz = pytz.timezone(self.config.get("timezone", "Asia/Manila"))
+            time_str = datetime.now(tz).strftime("%I:%M %p")
+            self.voice.speak(f"It is {time_str}.")
+            return
+        
+        # ====================================================================
+        # PRIORITY 5: CALENDAR
+        # ====================================================================
+        
+        if any(w in text_lower for w in ["schedule", "calendar", "agenda"]):
+            logger.info("📅 Schedule")
+            schedule = self.calendar.get_schedule()
+            self.voice.speak(schedule)
+            return
+        
+        # ====================================================================
+        # PRIORITY 6: WEATHER
+        # ====================================================================
+        
+        if any(w in text_lower for w in ["weather", "panahon"]):
+            logger.info("🌤️ Weather")
+            weather = self._get_weather()
+            self.voice.speak(weather)
+            return
+        
+        # ====================================================================
+        # PRIORITY 7: TIMER
+        # ====================================================================
+        
+        if "timer" in text_lower:
+            logger.info("⏱️ Timer")
+            self._start_timer(text_lower)
+            return
+        
+        # ====================================================================
+        # PRIORITY 8: CLIP
+        # ====================================================================
+        
+        if any(w in text_lower for w in ["clip that", "record that"]):
+            logger.info("📸 Clip")
+            pyautogui.hotkey('alt', 'f10')
+            self.voice.speak("Clipped.")
+            return
+        
+        # ====================================================================
+        # PRIORITY 9: PLAY ON YOUTUBE
+        # ====================================================================
+        
+        if "play" in text_lower and "youtube" in text_lower:
+            song = text_lower.replace("play", "").replace("on youtube", "").strip()
+            for w in wake_words:
+                song = song.replace(w, "").strip()
+            
+            if song and len(song) > 2:
+                logger.info(f"🎵 YouTube: {song}")
+                try:
+                    pywhatkit.playonyt(song)
+                    self.voice.speak(f"Playing {song}.")
+                except Exception as e:
+                    logger.error(f"YouTube failed: {e}")
+                    self.voice.speak("YouTube failed.")
+                return
+        
+        # ====================================================================
+        # PRIORITY 10: AI BRAIN (FALLBACK)
+        # ====================================================================
+        
+        logger.info("🤖 AI Brain")
+        response = self.brain.ask(
+            text,
+            user_name=self.config.get("user_name", "User"),
+            language=self.config.get("language", "English")
+        )
+        self.voice.speak(response)
+    
+    def _listen_loop(self):
+        """IMMORTAL Non-Blocking Listening Loop"""
+        logger.info("🎤 Listening loop started...")
+        source = self._audio_source
+        cycle = 0
+        
+        while self.is_listening:
+            try:
+                # STRICT AUDIO LOCKING: Don't listen while speaking
+                while self.voice.is_speaking or self.is_muted:
+                    logger.debug(f"🔒 Locked (speaking={self.voice.is_speaking}, muted={self.is_muted})")
+                    time.sleep(0.1)
+                
+                cycle += 1
+                if cycle % 100 == 0:
+                    gc.collect()
+                    logger.debug(f"🧹 Cycle {cycle}")
+                
+                if source is None:
+                    logger.warning("Audio source lost, re-opening...")
+                    try:
+                        source = self.microphone.__enter__()
+                        self._audio_source = source
+                        self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                    except Exception as e:
+                        logger.error(f"Re-open failed: {e}")
+                        time.sleep(1)
+                        continue
+                
+                try:
+                    logger.debug("⏺️ Listening...")
+                    audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=8)
+                    
+                except sr.WaitTimeoutError:
+                    logger.debug("⏳ Timeout")
+                    continue
+                except sr.UnknownValueError:
+                    logger.debug("🔇 Unclear")
+                    continue
+                except sr.RequestError as e:
+                    logger.warning(f"Recognition error: {e}")
+                    continue
+                except Exception as e:
+                    logger.exception(f"Audio error: {e}")
+                    time.sleep(0.5)
+                    continue
+                
+                # Recognize
+                try:
+                    logger.debug("🔄 Recognizing...")
+                    text = self.recognizer.recognize_google(audio)
+                    logger.info(f"✨ Recognized: {text}")
+                    
+                    # FIRE-AND-FORGET: Spawn thread, loop continues immediately
+                    threading.Thread(target=self.execute_command, args=(text,), daemon=True).start()
+                    
+                except sr.UnknownValueError:
+                    logger.debug("🔇 No speech")
+                    continue
+                except sr.RequestError as e:
+                    logger.warning(f"API error: {e}")
+                    time.sleep(1)
+                    continue
+                except Exception as e:
+                    logger.exception(f"Recognition error: {e}")
+                    continue
+                    
+            except Exception as e:
+                # CRITICAL: Never break the immortal loop
+                logger.exception(f"[LOOP ERROR] {e}")
+                try:
+                    self.voice.speak("I encountered a glitch, but I'm back online.")
+                except Exception:
+                    pass
+                time.sleep(0.5)
+                continue
+    
+    def start_listening(self):
+        """Start listening"""
+        if not self.is_listening:
+            try:
+                self._audio_source = self.microphone.__enter__()
+                logger.info("✓ Audio source opened")
+                
+                self.recognizer.adjust_for_ambient_noise(self._audio_source, duration=1)
+                self.recognizer.pause_threshold = 0.8
+                self.recognizer.dynamic_energy_threshold = False
+                logger.info("✓ Recognizer configured")
+            except Exception as e:
+                logger.warning(f"Audio setup warning: {e}")
+            
+            self.is_listening = True
+            threading.Thread(target=self._listen_loop, daemon=True).start()
+            logger.info("✓ Listening thread started")
+    
+    def stop_listening(self):
+        """Stop listening"""
+        self.is_listening = False
+        if self._audio_source:
+            try:
+                self.microphone.__exit__(None, None, None)
+            except Exception as e:
+                logger.warning(f"Close audio failed: {e}")
+    
+    def toggle_mute(self):
+        """Toggle mute"""
+        self.is_muted = not self.is_muted
+        state = "muted" if self.is_muted else "unmuted"
+        logger.info(f"🔇 {state}")
+        return self.is_muted
+
+# ============================================================================
+# LINNY APP - GUI + Tray (UI Layer Only)
 # ============================================================================
 class LinnyApp:
-    """Main L.I.N.N.Y. Application"""
+    """GUI and System Tray - Delegates all logic to LinnyAssistant"""
     
     def __init__(self, headless=False):
         self.headless = headless
         self.config = self._load_config()
         
         # Initialize components
+        self.voice = VoiceEngine(self.config.get("voice_en", "en-PH-RosaNeural"))
+        self.calendar = CalendarManager(self.config.get("timezone", "Asia/Manila"))
         self.brain = BrainManager(self.config)
-        self.calendar = GoogleCalendarManager(self.config.get("timezone", "Asia/Manila"))
         
-        voice = self.config.get("voice_en" if self.config.get("language") == "English" else "voice_tl")
-        self.voice = VoiceEngine(voice)
-        
-        self.recognizer = sr.Recognizer()
-        self.microphone = sr.Microphone()
-        
-        self.is_muted = False
-        self.is_listening = False
-        
-        # Non-blocking architecture
-        self._audio_source = None  # persistent microphone AudioSource
-        self._command_executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+        # CORE: LinnyAssistant handles all logic
+        self.assistant = LinnyAssistant(self.config, self.voice, self.calendar, self.brain)
         
         # GUI
         if not headless:
@@ -529,54 +773,49 @@ class LinnyApp:
         
         # Tray
         self.tray = TrayManager(
-            on_show_dashboard=self._show_dashboard,
-            on_toggle_mute=self._toggle_mute,
+            on_show=self._show_dashboard,
+            on_mute=self._toggle_mute,
             on_exit=self._exit_app
         )
         self.tray.start()
         
-        # Set high priority
+        # High priority
         try:
-            p = psutil.Process(os.getpid())
-            p.nice(psutil.HIGH_PRIORITY_CLASS)
+            psutil.Process(os.getpid()).nice(psutil.HIGH_PRIORITY_CLASS)
             logger.info("✓ High priority set")
         except Exception as e:
-            logger.warning(f"Could not set high priority: {e}")
+            logger.warning(f"Priority failed: {e}")
     
     def _load_config(self):
-        """Load configuration from external file"""
+        """Load config"""
         if CONFIG_FILE.exists():
             try:
                 with open(CONFIG_FILE, 'r') as f:
-                    user_config = json.load(f)
-                logger.info(f"✓ Loaded config from {CONFIG_FILE}")
-                return user_config
+                    return json.load(f)
             except json.JSONDecodeError as e:
-                logger.error(f"❌ Config file has invalid JSON: {e}")
-                logger.error(f"   Please fix {CONFIG_FILE} and restart")
+                logger.error(f"Config JSON error: {e}")
                 sys.exit(1)
         else:
-            logger.error(f"❌ Config file not found: {CONFIG_FILE}")
-            logger.error(f"   Please create linny_config.json with your settings")
+            logger.error(f"Config not found: {CONFIG_FILE}")
             sys.exit(1)
     
     def _save_config(self):
-        """Save configuration"""
+        """Save config"""
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(CONFIG_FILE, 'w') as f:
             json.dump(self.config, f, indent=2)
     
     def _setup_gui(self):
-        """Setup CustomTkinter GUI"""
+        """Setup GUI"""
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
         
         self.root = ctk.CTk()
-        self.root.title("L.I.N.N.Y. v6.1 - Dashboard")
+        self.root.title("L.I.N.N.Y. v8.0 - Dashboard")
         self.root.geometry("800x650")
         
         # Header
-        header = ctk.CTkLabel(self.root, text="L.I.N.N.Y. v6.1", font=("Arial", 24, "bold"))
+        header = ctk.CTkLabel(self.root, text="L.I.N.N.Y. v8.0", font=("Arial", 24, "bold"))
         header.pack(pady=20)
         
         # Status
@@ -621,11 +860,11 @@ class LinnyApp:
         save_btn = ctk.CTkButton(settings_frame, text="Save Settings", command=self._save_settings)
         save_btn.grid(row=6, column=0, columnspan=2, pady=10)
         
-        # Edit App Aliases Button
-        edit_aliases_btn = ctk.CTkButton(settings_frame, text="Edit App Aliases", command=self._edit_app_aliases)
-        edit_aliases_btn.grid(row=7, column=0, columnspan=2, pady=10)
+        # Edit Aliases Button
+        edit_btn = ctk.CTkButton(settings_frame, text="Edit App Aliases", command=self._edit_aliases)
+        edit_btn.grid(row=7, column=0, columnspan=2, pady=10)
         
-        # Control Buttons
+        # Control Frame
         control_frame = ctk.CTkFrame(self.root)
         control_frame.pack(pady=10)
         
@@ -639,7 +878,7 @@ class LinnyApp:
         self.root.protocol("WM_DELETE_WINDOW", self._hide_dashboard)
     
     def _save_settings(self):
-        """Save settings from GUI"""
+        """Save settings"""
         self.config["user_name"] = self.name_entry.get()
         self.config["language"] = self.lang_var.get()
         self.config["groq_api_key"] = self.groq_entry.get()
@@ -648,542 +887,77 @@ class LinnyApp:
         
         self._save_config()
         
-        # Reinitialize components
+        # Reinit
         self.brain = BrainManager(self.config)
+        self.assistant.brain = self.brain
         
-        voice = self.config.get("voice_en" if self.config.get("language") == "English" else "voice_tl")
-        self.voice.set_voice(voice)
-        
-        logger.info("✓ Settings saved and applied")
+        logger.info("✓ Settings saved")
         if hasattr(self, 'status_label'):
             self.status_label.configure(text="Status: Settings Saved!")
     
-    def _edit_app_aliases(self):
-        """Open config file in Notepad for editing app aliases"""
+    def _edit_aliases(self):
+        """Edit config in Notepad"""
         try:
             if not CONFIG_FILE.exists():
                 self._save_config()
-            
             subprocess.Popen(['notepad.exe', str(CONFIG_FILE)])
-            logger.info("✓ Opened config file for editing")
-            logger.info("⚠️  REMINDER: In JSON, backslashes must be doubled (\\\\)")
-            
-            if hasattr(self, 'status_label'):
-                self.status_label.configure(text="Status: Edit config.json and restart to apply")
+            logger.info("✓ Config editor opened")
         except Exception as e:
-            logger.error(f"Failed to open config file: {e}")
+            logger.error(f"Failed to open editor: {e}")
     
     def _show_dashboard(self):
-        """Show GUI dashboard"""
+        """Show GUI"""
         if hasattr(self, 'root'):
             self.root.deiconify()
     
     def _hide_dashboard(self):
-        """Hide GUI dashboard"""
+        """Hide GUI"""
         if hasattr(self, 'root'):
             self.root.withdraw()
     
     def _toggle_mute(self):
-        """Toggle mute state"""
-        self.is_muted = not self.is_muted
-        
-        if self.is_muted:
-            self.tray.update_state("muted")
-            logger.info("🔇 Muted")
-            if hasattr(self, 'mute_btn'):
-                self.mute_btn.configure(text="Unmute")
-        else:
-            self.tray.update_state("listening")
-            logger.info("🔊 Unmuted")
-            if hasattr(self, 'mute_btn'):
-                self.mute_btn.configure(text="Mute")
+        """Toggle mute"""
+        is_muted = self.assistant.toggle_mute()
+        self.tray.update_state("muted" if is_muted else "listening")
+        if hasattr(self, 'mute_btn'):
+            self.mute_btn.configure(text="Unmute" if is_muted else "Mute")
+    
+    def _start_listening(self):
+        """Start listening"""
+        self.assistant.start_listening()
+        self.tray.update_state("listening")
+        if hasattr(self, 'status_label'):
+            self.status_label.configure(text="Status: Listening...")
     
     def _exit_app(self):
-        """Exit application"""
-        logger.info("Exiting L.I.N.N.Y...")
-        self.is_listening = False
+        """Exit"""
+        logger.info("Exiting...")
+        self.assistant.stop_listening()
         self.tray.stop()
         if hasattr(self, 'root'):
             self.root.quit()
         sys.exit(0)
     
-    def _get_weather(self):
-        """Fetch weather for Dasmariñas, Cavite via Open-Meteo."""
-        try:
-            url = (
-                "https://api.open-meteo.com/v1/forecast"
-                "?latitude=14.32&longitude=120.93&current_weather=true&timezone=Asia%2FManila"
-            )
-            resp = requests.get(url, timeout=5)
-            resp.raise_for_status()
-            data = resp.json()
-            cw = data.get('current_weather') or {}
-            temp = cw.get('temperature')
-            code = cw.get('weathercode')
-            
-            if temp is None:
-                return "I couldn't read the temperature."
-            
-            # Simple WMO code mapping
-            condition = 'unknown'
-            if code == 0:
-                condition = 'clear'
-            elif code in (1, 2, 3):
-                condition = 'cloudy'
-            elif 45 <= code <= 48:
-                condition = 'foggy'
-            elif 50 <= code <= 67 or 80 <= code <= 86:
-                condition = 'rainy'
-            elif code >= 95:
-                condition = 'thunderstorms'
-            else:
-                condition = 'cloudy'
-            
-            return f"It is {round(temp)} degrees and {condition} in Dasmariñas."
-        except Exception as e:
-            logger.warning(f"Weather fetch failed: {e}")
-            return "I couldn't get the weather right now."
-    
-    def _start_timer(self, minutes_str):
-        """Start a background timer."""
-        try:
-            import re
-            match = re.search(r'(\d+)', minutes_str)
-            if match:
-                minutes = int(match.group(1))
-                def timer_thread():
-                    time.sleep(minutes * 60)
-                    self.tray.update_state("speaking")
-                    self.voice.speak(f"Your {minutes} minute timer is done!", 
-                                    lambda: self.tray.update_state("listening"))
-                
-                threading.Thread(target=timer_thread, daemon=True).start()
-                self.tray.update_state("speaking")
-                self.voice.speak(f"Timer set for {minutes} minutes.", 
-                                lambda: self.tray.update_state("listening"))
-            else:
-                self.tray.update_state("speaking")
-                self.voice.speak("I couldn't understand the duration.", 
-                                lambda: self.tray.update_state("listening"))
-        except Exception as e:
-            logger.error(f"Timer error: {e}")
-            self.tray.update_state("speaking")
-            self.voice.speak("I couldn't set the timer.", 
-                            lambda: self.tray.update_state("listening"))
-    
-    def _execute_command(self, text):
-        """
-        HARDCODED-FIRST COMMAND PROCESSING (v7.0 Non-Blocking Architecture)
-        Priority: Media > System > Apps > Utilities > AI Brain
-        This runs in a background thread, not blocking the listen loop.
-        """
-        text_lower = text.lower()
-        
-        # Wake word check
-        wake_words = ["linny", "lenny", "lini", "mini", "lhinny"]
-        if not any(wake in text_lower for wake in wake_words):
-            return
-        
-        logger.info(f"💬 Command received: {text}")
-        
-        # ========================================================================
-        # PRIORITY 1: MEDIA CONTROLS (HIGH PRIORITY - NO AI WASTE)
-        # ========================================================================
-        
-        # Resume / Unpause / Continue / Play Music
-        if any(word in text_lower for word in ["resume", "unpause", "continue", "play music"]):
-            logger.info("⏯️ Media: Play/Resume")
-            try:
-                import pyautogui
-                pyautogui.press("playpause")
-                self.tray.update_state("speaking")
-                self.voice.speak("Playing.", lambda: self.tray.update_state("listening"))
-            except Exception as e:
-                logger.error(f"Media control error: {e}")
-            return
-        
-        # Pause / Stop Music
-        if any(word in text_lower for word in ["pause", "stop music"]):
-            logger.info("⏸️ Media: Pause")
-            try:
-                import pyautogui
-                pyautogui.press("playpause")
-                self.tray.update_state("speaking")
-                self.voice.speak("Paused.", lambda: self.tray.update_state("listening"))
-            except Exception as e:
-                logger.error(f"Media control error: {e}")
-            return
-        
-        # Next / Skip
-        if any(word in text_lower for word in ["next", "skip", "next song", "skip song", "next track"]):
-            logger.info("⏭️ Media: Next")
-            try:
-                import pyautogui
-                pyautogui.press("nexttrack")
-                self.tray.update_state("speaking")
-                self.voice.speak("Next.", lambda: self.tray.update_state("listening"))
-            except Exception as e:
-                logger.error(f"Media control error: {e}")
-            return
-        
-        # Volume Up
-        if any(word in text_lower for word in ["volume up", "louder", "turn it up", "increase volume"]):
-            logger.info("🔊 Media: Volume Up")
-            try:
-                import pyautogui
-                for _ in range(2):
-                    pyautogui.press("volumeup")
-                self.tray.update_state("speaking")
-                self.voice.speak("Volume up.", lambda: self.tray.update_state("listening"))
-            except Exception as e:
-                logger.error(f"Media control error: {e}")
-            return
-        
-        # Volume Down
-        if any(word in text_lower for word in ["volume down", "softer", "lower volume", "quieter", "turn it down"]):
-            logger.info("🔉 Media: Volume Down")
-            try:
-                import pyautogui
-                for _ in range(2):
-                    pyautogui.press("volumedown")
-                self.tray.update_state("speaking")
-                self.voice.speak("Volume down.", lambda: self.tray.update_state("listening"))
-            except Exception as e:
-                logger.error(f"Media control error: {e}")
-            return
-        
-        # Mute
-        if "mute" in text_lower and "unmute" not in text_lower:
-            logger.info("🔇 Media: Mute")
-            try:
-                import pyautogui
-                pyautogui.press("volumemute")
-                self.tray.update_state("speaking")
-                self.voice.speak("Muted.", lambda: self.tray.update_state("listening"))
-            except Exception as e:
-                logger.error(f"Media control error: {e}")
-            return
-        
-        # ========================================================================
-        # PRIORITY 2: SYSTEM COMMANDS
-        # ========================================================================
-        
-        if any(word in text_lower for word in ["shutdown", "shut down"]):
-            logger.info("⚡ System: Shutdown")
-            self.tray.update_state("speaking")
-            self.voice.speak("Shutting down the system.", lambda: self.tray.update_state("listening"))
-            threading.Timer(3.0, lambda: os.system("shutdown /s /t 0")).start()
-            return
-        
-        if "lock" in text_lower and any(word in text_lower for word in ["computer", "pc", "workstation"]):
-            logger.info("🔒 System: Lock")
-            self.tray.update_state("speaking")
-            self.voice.speak("Locking your workstation.", lambda: self.tray.update_state("listening"))
-            threading.Timer(1.0, lambda: ctypes.windll.user32.LockWorkStation()).start()
-            return
-        
-        # ========================================================================
-        # PRIORITY 3: APP LAUNCHER (SMART, NO AI)
-        # ========================================================================
-        
-        app_name = None
-        for verb in ["open", "launch", "start", "lunch"]:
-            if verb in text_lower:
-                parts = text_lower.split(verb, 1)
-                if len(parts) > 1:
-                    app_name = parts[1].strip()
-                    break
-        
-        if app_name:
-            for wake_word in wake_words:
-                app_name = app_name.replace(wake_word, "").strip()
-            
-            logger.info(f"🚀 Launching app: {app_name}")
-            app_aliases = self.config.get("app_aliases", {})
-            target_path = app_aliases.get(app_name, app_name)
-            
-            try:
-                # Silent launch: suppress all stdout/stderr to prevent console clutter
-                subprocess.Popen(
-                    target_path,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    shell=True
-                )
-                
-                if app_name in app_aliases:
-                    logger.info(f"✓ Launched {app_name} via alias: {target_path}")
-                else:
-                    logger.info(f"✓ Launched {app_name} directly")
-                
-                self.tray.update_state("speaking")
-                self.voice.speak(f"Opening {app_name}.", lambda: self.tray.update_state("listening"))
-            except FileNotFoundError:
-                logger.warning(f"App not found: {app_name}")
-                self.tray.update_state("speaking")
-                self.voice.speak(f"I couldn't find {app_name}.", lambda: self.tray.update_state("listening"))
-            except Exception as e:
-                logger.error(f"Failed to launch {app_name}: {e}")
-                self.tray.update_state("speaking")
-                self.voice.speak("I couldn't open that application.", lambda: self.tray.update_state("listening"))
-            return
-        
-        # ========================================================================
-        # PRIORITY 4: UTILITIES (TIME, CALENDAR, WEATHER, TIMER)
-        # ========================================================================
-        
-        # Time Query
-        if any(word in text_lower for word in ["time", "oras"]):
-            logger.info("🕐 Time")
-            now = datetime.now(pytz.timezone(self.config.get("timezone", "Asia/Manila")))
-            time_str = now.strftime("%I:%M %p")
-            self.tray.update_state("speaking")
-            self.voice.speak(f"It is {time_str}.", lambda: self.tray.update_state("listening"))
-            return
-        
-        # Calendar / Schedule
-        if any(word in text_lower for word in ["schedule", "calendar", "agenda", "events"]):
-            logger.info("📅 Schedule")
-            schedule = self.calendar.get_smart_schedule()
-            self.tray.update_state("speaking")
-            self.voice.speak(schedule, lambda: self.tray.update_state("listening"))
-            return
-        
-        # Weather
-        if any(word in text_lower for word in ["weather", "panahon"]):
-            logger.info("🌤️ Weather")
-            weather = self._get_weather()
-            self.tray.update_state("speaking")
-            self.voice.speak(weather, lambda: self.tray.update_state("listening"))
-            return
-        
-        # Timer
-        if "timer" in text_lower:
-            logger.info("⏱️ Timer")
-            self._start_timer(text_lower)
-            return
-        
-        # Play on YouTube (Special case, not AI)
-        if "play" in text_lower:
-            song_name = text_lower
-            for wake_word in wake_words:
-                song_name = song_name.replace(wake_word, "")
-            song_name = song_name.replace("play", "").strip()
-            song_name = song_name.replace("on youtube", "").strip()
-            
-            if song_name and len(song_name) > 2:
-                logger.info(f"🎵 YouTube: {song_name}")
-                try:
-                    pywhatkit.playonyt(song_name)
-                    self.tray.update_state("speaking")
-                    self.voice.speak(f"Playing {song_name}.", lambda: self.tray.update_state("listening"))
-                except Exception as e:
-                    logger.error(f"YouTube error: {e}")
-                    self.tray.update_state("speaking")
-                    self.voice.speak("I couldn't play that.", lambda: self.tray.update_state("listening"))
-                return
-        
-        # ========================================================================
-        # PRIORITY 5: AI BRAIN (FALLBACK ONLY)
-        # ========================================================================
-        
-        logger.info("🤖 Fallback to AI Brain")
-        response = self.brain.ask(
-            text,
-            user_name=self.config.get("user_name", "User"),
-            language=self.config.get("language", "English")
-        )
-        self.tray.update_state("speaking")
-        self.voice.speak(response, lambda: self.tray.update_state("listening"))
-    
-    def _listen_loop(self):
-        """Robust non-blocking listening loop with STRICT AUDIO LOCKING.
-        CRITICAL: Microphone is BLOCKED while TTS is speaking to prevent self-hearing.
-        """
-        logger.info("🎤 Listening started (robust mode with audio locking)...")
-        source = self._audio_source
-        cycle_count = 0
-        
-        while self.is_listening:
-            try:
-                # STRICT AUDIO LOCKING: Wait until voice engine is done speaking
-                # This prevents Linny from hearing her own voice
-                while self.is_speaking or self.is_muted:
-                    logger.debug(f"🔒 Audio locked (speaking={self.is_speaking}, muted={self.is_muted})")
-                    time.sleep(0.1)
-                
-                # Only NOW do we proceed to listen
-                
-                # Memory optimization
-                cycle_count += 1
-                if cycle_count % 100 == 0:
-                    gc.collect()
-                    logger.debug(f"🧹 Cycle {cycle_count}")
-                
-                if source is None:
-                    logger.warning("Audio source lost, attempting to re-open...")
-                    try:
-                        source = self.microphone.__enter__()
-                        self._audio_source = source
-                        self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                    except Exception as e:
-                        logger.error(f"Could not re-open audio: {e}")
-                        time.sleep(1)
-                        continue
-                
-                try:
-                    # Capture audio (timeout: don't wait forever)
-                    logger.debug("⏺️ Listening for audio...")
-                    audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=8)
-                    logger.debug("✅ Audio captured")
-                    
-                except sr.WaitTimeoutError:
-                    logger.debug("⏳ Timeout (no speech)")
-                    continue
-                except sr.UnknownValueError:
-                    logger.debug("🔇 Could not understand")
-                    continue
-                except sr.RequestError as e:
-                    logger.warning(f"Recognition error: {e}")
-                    continue
-                except Exception as e:
-                    logger.exception(f"Audio capture error: {e}")
-                    time.sleep(0.5)
-                    continue
-                
-                # Recognize speech (in background thread to avoid blocking loop)
-                try:
-                    logger.debug("🔄 Recognizing...")
-                    text = self.recognizer.recognize_google(audio)
-                    logger.info(f"✨ Recognized: {text}")
-                    
-                    # FIRE-AND-FORGET: Spawn command thread, loop resumes immediately
-                    self._command_executor.submit(self._execute_command, text)
-                    logger.debug("→ Command thread dispatched")
-                    
-                except sr.UnknownValueError:
-                    logger.debug("🔇 No recognizable speech")
-                    continue
-                except sr.RequestError as e:
-                    logger.warning(f"Recognition service error: {e}")
-                    time.sleep(1)
-                    continue
-                except Exception as e:
-                    logger.exception(f"Recognition error: {e}")
-                    continue
-                    
-            except Exception as e:
-                # IMMORTAL LOOP: catch-all, log, continue
-                logger.exception(f"[LISTEN LOOP ERROR] {e}")
-                try:
-                    self.tray.update_state("speaking")
-                    self.voice.speak("I encountered a glitch, but I'm back online.", 
-                                    lambda: self.tray.update_state("listening"))
-                except Exception:
-                    pass
-                time.sleep(0.5)
-                continue
-    
-    def _start_listening(self):
-        """Start listening: open mic once, calibrate once, spawn daemon thread."""
-        if not self.is_listening:
-            # Open audio source once (persistent)
-            try:
-                self._audio_source = self.microphone.__enter__()
-                logger.info("✓ Audio source opened (persistent)")
-                
-                # Calibrate once
-                self.recognizer.adjust_for_ambient_noise(self._audio_source, duration=1)
-                logger.info("✓ Ambient noise calibrated")
-                
-                # Responsive recognizer
-                self.recognizer.pause_threshold = 0.8
-                self.recognizer.dynamic_energy_threshold = False
-                logger.info("✓ Recognizer configured")
-            except Exception as e:
-                logger.warning(f"Audio setup warning: {e}")
-                # Still try to proceed
-            
-            self.is_listening = True
-            threading.Thread(target=self._listen_loop, daemon=True).start()
-            logger.info("✓ Listening thread started")
-            if hasattr(self, 'status_label'):
-                self.status_label.configure(text="Status: Listening...")
-    
-    def startup_sequence(self):
-        """Execute startup sequence for --startup flag"""
-        logger.info("🚀 Executing startup sequence...")
-        
-        # Hide GUI
-        if hasattr(self, 'root'):
-            self.root.withdraw()
-        
-        # Greeting
-        tz = pytz.timezone(self.config.get("timezone", "Asia/Manila"))
-        current_hour = datetime.now(tz).hour
-        
-        if current_hour < 12:
-            greeting = "Good morning"
-        elif current_hour < 18:
-            greeting = "Good afternoon"
-        else:
-            greeting = "Good evening"
-        
-        user_name = self.config.get("user_name", "User")
-        greeting_msg = f"{greeting}, {user_name}. LINNY systems online."
-        
-        self.voice.speak(greeting_msg)
-        
-        # Wait for greeting to finish
-        while self.voice.is_speaking:
-            pygame.time.Clock().tick(10)
-        
-        # Read schedule
-        schedule = self.calendar.get_smart_schedule()
-        self.voice.speak(schedule)
-        
-        # Wait for schedule to finish
-        while self.voice.is_speaking:
-            pygame.time.Clock().tick(10)
-        
-        # Lock workstation
-        logger.info("🔒 Locking workstation...")
-        ctypes.windll.user32.LockWorkStation()
-        
-        # Memory optimization - cleanup after startup
-        gc.collect()
-        logger.info("🧹 Startup memory cleanup complete")
-        
-        # Start listening
-        self._start_listening()
-    
     def run(self):
-        """Run the application"""
+        """Run app"""
         if self.headless:
-            # Headless mode - just keep alive
             try:
                 while True:
                     pygame.time.Clock().tick(1)
             except KeyboardInterrupt:
                 self._exit_app()
         else:
-            # GUI mode
             self.root.mainloop()
 
 # ============================================================================
 # ENTRY POINT
 # ============================================================================
 def main():
-    """Main entry point"""
+    """Main entry"""
     headless = "--startup" in sys.argv
-    
     app = LinnyApp(headless=headless)
-    
-    if headless:
-        app.startup_sequence()
-    else:
+    if not headless:
         app._start_listening()
-    
     app.run()
 
 if __name__ == "__main__":
