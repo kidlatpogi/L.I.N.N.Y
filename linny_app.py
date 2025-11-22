@@ -1,13 +1,16 @@
 """
-L.I.N.N.Y. v8.0 - Loyal Intelligent Neural Network for You
-Complete Rewrite: Strict Class Separation, Hardcoded-First, Non-Blocking
+L.I.N.N.Y. v9.0 - Loyal Intelligent Neural Network for You
+Production-Ready: Smart Bulb Integration, Hybrid App Launcher, No OpenAI Lib
 
 Architecture:
 - VoiceEngine: TTS only, manages is_speaking flag
-- LinnyAssistant: Core logic, listening, command execution (checks voice.is_speaking)
+- LightManager: Tapo L530E smart bulb control (kasa)
+- BrainManager: Groq + Gemini + Perplexity (via requests, no openai lib)
+- CalendarManager: Google Calendar with date intent detection
+- LinnyAssistant: Core logic, listening, command execution
 - LinnyApp: GUI + Tray only, delegates to LinnyAssistant
 - Immortal listener: Daemon thread, never breaks, fire-and-forget execution
-- Hardcoded-first: 10-level priority before AI fallback
+- Hardcoded-first: 10+ priority levels before AI fallback
 """
 
 import os
@@ -44,13 +47,19 @@ import pyautogui
 # AI Providers
 import groq
 import google.generativeai as genai
-from openai import OpenAI
 
 # Google Calendar
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
+
+# Smart Home
+try:
+    from kasa import SmartBulb, Discover
+except ImportError:
+    SmartBulb = None
+    Discover = None
 
 # Utilities
 import pytz
@@ -72,26 +81,138 @@ logging.getLogger('googleapiclient.discovery_cache').setLevel(logging.ERROR)
 logging.getLogger('googleapiclient.discovery').setLevel(logging.ERROR)
 logging.getLogger('urllib3').setLevel(logging.ERROR)
 logging.getLogger('PIL').setLevel(logging.ERROR)
+logging.getLogger('kasa').setLevel(logging.WARNING)
 
 # ============================================================================
-# CONSTANTS
+# CONSTANTS & DEFAULT CONFIG
 # ============================================================================
 CONFIG_FILE = Path.home() / ".linny" / "linny_config.json"
 TOKEN_FILE = Path.home() / ".linny" / "token.json"
 CREDENTIALS_FILE = Path("credentials.json")
 CALENDAR_SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 
+DEFAULT_CONFIG = {
+    "language": "English",
+    "timezone": "Asia/Manila",
+    "user_name": "Zeus",
+    "voice_en": "en-PH-RosaNeural",
+    "voice_tl": "fil-PH-AngelNeural",
+    "groq_api_key": "",
+    "gemini_api_key": "",
+    "perplexity_api_key": "",
+    "smart_bulb_ip": "192.168.1.100",
+    "app_aliases": {
+        "code": "code",
+        "vs code": r"C:\Users\Zeus\AppData\Local\Programs\Microsoft VS Code\code.exe",
+        "browser": r"C:\Users\Zeus\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe",
+        "brave": r"C:\Users\Zeus\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe",
+        "spotify": "spotify:",
+        "apple music": "https://music.apple.com/us/new",
+        "calculator": "calc",
+        "notepad": "notepad",
+        "terminal": "wt",
+        "files": "explorer",
+        "explorer": "explorer",
+        "word": "winword",
+        "teams": "msteams:",
+        "microsoft teams": "msteams:",
+        "discord": r"C:\Users\Zeus\AppData\Local\Discord\Update.exe --processStart Discord.exe",
+        "antigravity": r"C:\Users\Zeus\AppData\Local\Programs\Antigravity\Antigravity.exe",
+        "valorant": r"E:\GAMES\Riot Games\Riot Client\RiotClientServices.exe --launch-product=valorant --launch-patchline=live",
+        "league": r"E:\GAMES\Riot Games\Riot Client\RiotClientServices.exe --launch-product=league_of_legends --launch-patchline=live",
+        "lol": r"E:\GAMES\Riot Games\Riot Client\RiotClientServices.exe --launch-product=league_of_legends --launch-patchline=live"
+    }
+}
+
 # ============================================================================
-# BRAIN MANAGER - Cascading AI
+# LIGHT MANAGER - Tapo L530E Smart Bulb
+# ============================================================================
+class LightManager:
+    """Control Tapo L530E smart bulb via kasa"""
+    
+    def __init__(self, ip_address=None):
+        self.ip = ip_address or "192.168.1.100"
+        self.bulb = None
+        self._connect()
+    
+    def _connect(self):
+        """Connect to smart bulb"""
+        if SmartBulb is None:
+            logger.warning("kasa not installed, smart bulb disabled")
+            return
+        
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            self.bulb = loop.run_until_complete(SmartBulb.connect(self.ip))
+            logger.info(f"✓ Smart bulb connected: {self.ip}")
+        except Exception as e:
+            logger.warning(f"Smart bulb connection failed: {e}")
+            self.bulb = None
+    
+    def set_mode(self, mode):
+        """Set bulb mode: Focus, Movie, Gaming"""
+        if not self.bulb:
+            logger.warning("Smart bulb not available")
+            return
+        
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            if mode.lower() == "focus":
+                # 6000K, 100% brightness
+                loop.run_until_complete(self.bulb.set_color_temp(6000))
+                loop.run_until_complete(self.bulb.set_brightness(100))
+                logger.info("💡 Focus mode activated")
+            elif mode.lower() == "movie":
+                # 2500K, 30% brightness
+                loop.run_until_complete(self.bulb.set_color_temp(2500))
+                loop.run_until_complete(self.bulb.set_brightness(30))
+                logger.info("🎬 Movie mode activated")
+            elif mode.lower() == "gaming":
+                # Purple HSV(280, 100, 60)
+                loop.run_until_complete(self.bulb.set_hsv(280, 100, 60))
+                logger.info("🎮 Gaming mode activated")
+            else:
+                logger.warning(f"Unknown mode: {mode}")
+        except Exception as e:
+            logger.error(f"Failed to set mode: {e}")
+    
+    def turn_on(self):
+        """Turn on bulb"""
+        if not self.bulb:
+            return
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.bulb.turn_on())
+            logger.info("💡 Bulb turned on")
+        except Exception as e:
+            logger.error(f"Failed to turn on: {e}")
+    
+    def turn_off(self):
+        """Turn off bulb"""
+        if not self.bulb:
+            return
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.bulb.turn_off())
+            logger.info("💡 Bulb turned off")
+        except Exception as e:
+            logger.error(f"Failed to turn off: {e}")
+
+# ============================================================================
+# BRAIN MANAGER - Cascading AI (No OpenAI Library)
 # ============================================================================
 class BrainManager:
-    """Cascading AI with Groq -> Gemini -> Perplexity fallback"""
+    """Cascading AI: Groq -> Gemini -> Perplexity (via requests)"""
     
     def __init__(self, config):
         self.config = config
         self.groq_client = None
         self.gemini_model = None
-        self.perplexity_client = None
         self._init_providers()
     
     def _init_providers(self):
@@ -110,41 +231,56 @@ class BrainManager:
                 logger.info("✓ Gemini initialized")
             except Exception as e:
                 logger.warning(f"Gemini failed: {e}")
-        
-        if self.config.get("perplexity_api_key"):
-            try:
-                self.perplexity_client = OpenAI(
-                    api_key=self.config["perplexity_api_key"],
-                    base_url="https://api.perplexity.ai"
-                )
-                logger.info("✓ Perplexity initialized")
-            except Exception as e:
-                logger.warning(f"Perplexity failed: {e}")
     
     def _is_search(self, query):
         """Detect search intent"""
-        keywords = ["search", "price", "news", "weather", "latest", "who"]
+        keywords = ["search", "price", "news", "latest", "who", "what", "how"]
         return any(k in query.lower() for k in keywords)
     
+    def _ask_perplexity(self, query, system):
+        """Ask Perplexity via raw HTTP requests"""
+        if not self.config.get("perplexity_api_key"):
+            return None
+        
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.config['perplexity_api_key']}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "llama-3.1-sonar-small-128k-online",
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": query}
+                ]
+            }
+            response = requests.post(
+                "https://api.perplexity.ai/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            logger.info("✓ Perplexity responded")
+            return data['choices'][0]['message']['content']
+        except Exception as e:
+            logger.warning(f"Perplexity failed: {e}")
+            return None
+    
     def ask(self, query, user_name="User", language="English"):
-        """Cascading ask: Perplexity (search) -> Groq -> Gemini -> Perplexity"""
-        system = f"You are Linny, a helpful AI. User: {user_name}. Language: {language}. Be concise."
+        """Cascading ask: Search -> Perplexity, Chat -> Groq, Error -> Gemini"""
+        system = f"You are Linny, a helpful AI assistant. User: {user_name}. Language: {language}. Be concise (1-2 sentences)."
         
         is_search = self._is_search(query)
         
-        # Search intent -> Try Perplexity first
-        if is_search and self.perplexity_client:
-            try:
-                response = self.perplexity_client.chat.completions.create(
-                    model="llama-3.1-sonar-small-128k-online",
-                    messages=[{"role": "system", "content": system}, {"role": "user", "content": query}]
-                )
-                logger.info("✓ Perplexity (search) responded")
-                return response.choices[0].message.content
-            except Exception as e:
-                logger.warning(f"Perplexity failed: {e}")
+        # Search/News queries -> Perplexity first
+        if is_search:
+            result = self._ask_perplexity(query, system)
+            if result:
+                return result
         
-        # Try Groq
+        # Regular chat -> Groq
         if self.groq_client:
             try:
                 response = self.groq_client.chat.completions.create(
@@ -157,7 +293,7 @@ class BrainManager:
             except Exception as e:
                 logger.warning(f"Groq failed: {e}")
         
-        # Try Gemini
+        # Fallback to Gemini
         if self.gemini_model:
             try:
                 response = self.gemini_model.generate_content(f"{system}\n\nUser: {query}")
@@ -166,17 +302,10 @@ class BrainManager:
             except Exception as e:
                 logger.warning(f"Gemini failed: {e}")
         
-        # Perplexity fallback
-        if not is_search and self.perplexity_client:
-            try:
-                response = self.perplexity_client.chat.completions.create(
-                    model="llama-3.1-sonar-small-128k-online",
-                    messages=[{"role": "system", "content": system}, {"role": "user", "content": query}]
-                )
-                logger.info("✓ Perplexity (fallback) responded")
-                return response.choices[0].message.content
-            except Exception as e:
-                logger.warning(f"Perplexity failed: {e}")
+        # Last resort: Perplexity general query
+        result = self._ask_perplexity(query, system)
+        if result:
+            return result
         
         return "All AI systems are offline. Please check your API keys."
 
@@ -232,37 +361,28 @@ class CalendarManager:
             logger.warning(f"Could not find School calendar: {e}")
     
     def get_schedule(self, query=""):
-        """Get schedule with smart intent detection
-        - If 'tomorrow' or 'bukas' in query: Return ONLY tomorrow's events
-        - Else: Smart switch (today's remaining -> if empty, tomorrow)
-        """
+        """Get schedule with smart intent detection"""
         if not self.service:
             return "Calendar not configured."
         
         try:
             now = datetime.now(self.timezone)
-            
-            # INTENT DETECTION: Tomorrow request?
             query_lower = query.lower() if query else ""
             is_tomorrow_request = any(w in query_lower for w in ["tomorrow", "bukas", "next day"])
             
             if is_tomorrow_request:
-                # TOMORROW: Set date range to tomorrow 00:00 - 23:59
                 logger.info("📅 Tomorrow schedule requested")
                 target_day = now + timedelta(days=1)
                 day_start = target_day.replace(hour=0, minute=0, second=0, microsecond=0)
                 day_end = day_start + timedelta(days=1)
                 label = "tomorrow"
             else:
-                # TODAY (Smart Switch): Check today first
                 logger.info("📅 Today/Smart schedule requested")
                 day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 day_end = day_start + timedelta(days=1)
                 label = "today"
             
             cal_id = self.school_cal_id or 'primary'
-            
-            # Fetch events for the selected day
             events_result = self.service.events().list(
                 calendarId=cal_id,
                 timeMin=day_start.isoformat(),
@@ -272,7 +392,6 @@ class CalendarManager:
             ).execute()
             
             events = events_result.get('items', [])
-            
             ongoing = []
             upcoming = []
             
@@ -288,8 +407,6 @@ class CalendarManager:
                 if end_t.tzinfo is None:
                     end_t = self.timezone.localize(end_t)
                 
-                # For today: skip past events, keep ongoing/upcoming
-                # For tomorrow: show all events
                 if label == "today" and end_t < now:
                     continue
                 elif start_t < now < end_t:
@@ -299,10 +416,10 @@ class CalendarManager:
             
             active = ongoing + upcoming
             
-            # SMART SWITCH: If today is empty and not explicitly requested, try tomorrow
+            # SMART SWITCH: If today is empty, try tomorrow
             if not active and label == "today" and not is_tomorrow_request:
                 logger.info("📅 Today empty, switching to tomorrow")
-                return self.get_schedule("tomorrow")  # Recursive call for tomorrow
+                return self.get_schedule("tomorrow")
             
             if not active:
                 return f"You have no schedule for {label}."
@@ -325,7 +442,7 @@ class CalendarManager:
 # VOICE ENGINE - TTS Only
 # ============================================================================
 class VoiceEngine:
-    """Handles TTS with Edge TTS + Pygame playback. Manages is_speaking flag."""
+    """Handles TTS with Edge TTS + Pygame playback"""
     
     def __init__(self, voice="en-PH-RosaNeural"):
         self.voice = voice
@@ -333,25 +450,22 @@ class VoiceEngine:
         self.is_speaking = False
     
     def speak(self, text, callback=None):
-        """Speak text asynchronously - is_speaking flag MUST be True before TTS"""
+        """Speak text asynchronously"""
         def _thread():
             try:
                 self.is_speaking = True
                 logger.debug("🔒 TTS locked")
                 
-                # Generate TTS
                 temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
                 temp_path = temp_file.name
                 temp_file.close()
                 
                 asyncio.run(edge_tts.Communicate(text, self.voice).save(temp_path))
                 
-                # Play
                 pygame.mixer.music.load(temp_path)
                 pygame.mixer.music.play()
                 logger.debug("▶️ Playback started")
                 
-                # Wait until done
                 while pygame.mixer.music.get_busy():
                     pygame.time.Clock().tick(10)
                 
@@ -404,7 +518,7 @@ class TrayManager:
     def start(self):
         """Start tray"""
         img = self._img('green')
-        self.icon = pystray.Icon("LINNY", img, "L.I.N.N.Y. v8.0", self._menu())
+        self.icon = pystray.Icon("LINNY", img, "L.I.N.N.Y. v9.0", self._menu())
         threading.Thread(target=self.icon.run, daemon=True).start()
         logger.info("✓ Tray started")
     
@@ -421,16 +535,17 @@ class TrayManager:
             self.icon.stop()
 
 # ============================================================================
-# LINNY ASSISTANT - Logic + Listening (Core Brain)
+# LINNY ASSISTANT - Core Logic + Listening
 # ============================================================================
 class LinnyAssistant:
     """Handles listening, command processing, and logic"""
     
-    def __init__(self, config, voice, calendar, brain):
+    def __init__(self, config, voice, calendar, brain, lights):
         self.config = config
         self.voice = voice
         self.calendar = calendar
         self.brain = brain
+        self.lights = lights
         
         self.is_listening = False
         self.is_muted = False
@@ -438,8 +553,6 @@ class LinnyAssistant:
         self.recognizer = sr.Recognizer()
         self.microphone = sr.Microphone()
         self._audio_source = None
-        
-        # Command executor for non-blocking execution
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
     
     def _get_weather(self):
@@ -493,10 +606,42 @@ class LinnyAssistant:
             logger.error(f"Timer failed: {e}")
             self.voice.speak("Timer failed.")
     
+    def _launch_app(self, app_name):
+        """Hybrid app launcher: Shell for games with args, os.startfile for simple apps"""
+        app_name_lower = app_name.lower()
+        app_aliases = self.config.get("app_aliases", {})
+        target = app_aliases.get(app_name_lower, app_name_lower)
+        
+        logger.info(f"🚀 Launching: {app_name}")
+        
+        try:
+            # Check if command has arguments (games, special executables)
+            has_args = any(arg in target for arg in ["--", "/", " -"])
+            
+            if has_args:
+                # Use shell for complex commands with arguments
+                logger.debug(f"Using shell: {target}")
+                subprocess.Popen(
+                    f'"{target}"',
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    shell=True
+                )
+            else:
+                # Use os.startfile for simple apps/protocols
+                logger.debug(f"Using startfile: {target}")
+                os.startfile(target)
+            
+            self.voice.speak(f"Opening {app_name}.")
+        except Exception as e:
+            logger.error(f"Failed to launch {app_name}: {e}")
+            self.voice.speak(f"Couldn't find {app_name}.")
+    
     def execute_command(self, text):
         """
         HARDCODED-FIRST COMMAND EXECUTION
-        Priority: System > Media > Apps > Time > Calendar > Weather > Clip > AI Brain
+        Priority 1: System | 2: Media | 3: Lights | 4: Apps | 5: Time | 6: Date |
+                   7: Calendar | 8: Weather | 9: Timer | 10: Clip | 11: YouTube | 12: AI
         """
         text_lower = text.lower()
         
@@ -509,7 +654,7 @@ class LinnyAssistant:
             "ginny", "hinny", "finny", "vinny", "winny", "pinny",
             "lhinny",
         ]
-
+        
         if not any(w in text_lower for w in wake_words):
             logger.debug(f"No wake word in: {text}")
             return
@@ -575,7 +720,41 @@ class LinnyAssistant:
             return
         
         # ====================================================================
-        # PRIORITY 3: APP LAUNCHER
+        # PRIORITY 3: SMART LIGHT CONTROLS
+        # ====================================================================
+        
+        if any(w in text_lower for w in ["turn on lights", "lights on", "turn on the lights"]):
+            logger.info("💡 Lights: On")
+            self.lights.turn_on()
+            self.voice.speak("Lights turned on.")
+            return
+        
+        if any(w in text_lower for w in ["turn off lights", "lights off", "turn off the lights"]):
+            logger.info("💡 Lights: Off")
+            self.lights.turn_off()
+            self.voice.speak("Lights turned off.")
+            return
+        
+        if "focus mode" in text_lower or "focus" in text_lower:
+            logger.info("💡 Lights: Focus Mode")
+            self.lights.set_mode("focus")
+            self.voice.speak("Focus mode activated.")
+            return
+        
+        if "movie mode" in text_lower or "movie" in text_lower:
+            logger.info("💡 Lights: Movie Mode")
+            self.lights.set_mode("movie")
+            self.voice.speak("Movie mode activated.")
+            return
+        
+        if "gaming mode" in text_lower or "gaming" in text_lower or "game mode" in text_lower:
+            logger.info("💡 Lights: Gaming Mode")
+            self.lights.set_mode("gaming")
+            self.voice.speak("Gaming mode activated.")
+            return
+        
+        # ====================================================================
+        # PRIORITY 4: APP LAUNCHER
         # ====================================================================
         
         app_name = None
@@ -590,28 +769,14 @@ class LinnyAssistant:
             for wake_word in wake_words:
                 app_name = app_name.replace(wake_word, "").strip()
             
-            logger.info(f"🚀 App: {app_name}")
-            app_aliases = self.config.get("app_aliases", {})
-            target = app_aliases.get(app_name, app_name)
-            
-            try:
-                subprocess.Popen(
-                    target,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    shell=True
-                )
-                self.voice.speak(f"Opening {app_name}.")
-            except Exception as e:
-                logger.error(f"Failed to launch {app_name}: {e}")
-                self.voice.speak(f"Couldn't find {app_name}.")
+            self._launch_app(app_name)
             return
         
         # ====================================================================
-        # PRIORITY 4: TIME
+        # PRIORITY 5: TIME
         # ====================================================================
         
-        if any(w in text_lower for w in ["time", "oras"]):
+        if any(w in text_lower for w in ["time", "oras", "what time"]):
             logger.info("🕐 Time")
             tz = pytz.timezone(self.config.get("timezone", "Asia/Manila"))
             time_str = datetime.now(tz).strftime("%I:%M %p")
@@ -619,17 +784,28 @@ class LinnyAssistant:
             return
         
         # ====================================================================
-        # PRIORITY 5: CALENDAR
+        # PRIORITY 6: DATE
+        # ====================================================================
+        
+        if any(w in text_lower for w in ["date", "day", "what day", "what is today"]):
+            logger.info("📅 Date")
+            tz = pytz.timezone(self.config.get("timezone", "Asia/Manila"))
+            date_str = datetime.now(tz).strftime("%A, %B %d, %Y")
+            self.voice.speak(f"Today is {date_str}.")
+            return
+        
+        # ====================================================================
+        # PRIORITY 7: CALENDAR
         # ====================================================================
         
         if any(w in text_lower for w in ["schedule", "calendar", "agenda"]):
             logger.info("📅 Schedule")
-            schedule = self.calendar.get_schedule(query=text)  # Pass query for intent detection
+            schedule = self.calendar.get_schedule(query=text)
             self.voice.speak(schedule)
             return
         
         # ====================================================================
-        # PRIORITY 6: WEATHER
+        # PRIORITY 8: WEATHER
         # ====================================================================
         
         if any(w in text_lower for w in ["weather", "panahon"]):
@@ -639,7 +815,7 @@ class LinnyAssistant:
             return
         
         # ====================================================================
-        # PRIORITY 7: TIMER
+        # PRIORITY 9: TIMER
         # ====================================================================
         
         if "timer" in text_lower:
@@ -648,7 +824,7 @@ class LinnyAssistant:
             return
         
         # ====================================================================
-        # PRIORITY 8: CLIP
+        # PRIORITY 10: CLIP
         # ====================================================================
         
         if any(w in text_lower for w in ["clip that", "record that"]):
@@ -658,7 +834,7 @@ class LinnyAssistant:
             return
         
         # ====================================================================
-        # PRIORITY 9: PLAY ON YOUTUBE
+        # PRIORITY 11: PLAY ON YOUTUBE
         # ====================================================================
         
         if "play" in text_lower and "youtube" in text_lower:
@@ -677,7 +853,7 @@ class LinnyAssistant:
                 return
         
         # ====================================================================
-        # PRIORITY 10: AI BRAIN (FALLBACK)
+        # PRIORITY 12: AI BRAIN (FALLBACK)
         # ====================================================================
         
         logger.info("🤖 AI Brain")
@@ -696,7 +872,7 @@ class LinnyAssistant:
         
         while self.is_listening:
             try:
-                # STRICT AUDIO LOCKING: Don't listen while speaking
+                # STRICT AUDIO LOCKING
                 while self.voice.is_speaking or self.is_muted:
                     logger.debug(f"🔒 Locked (speaking={self.voice.is_speaking}, muted={self.is_muted})")
                     time.sleep(0.1)
@@ -720,7 +896,6 @@ class LinnyAssistant:
                 try:
                     logger.debug("⏺️ Listening...")
                     audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=8)
-                    
                 except sr.WaitTimeoutError:
                     logger.debug("⏳ Timeout")
                     continue
@@ -740,10 +915,7 @@ class LinnyAssistant:
                     logger.debug("🔄 Recognizing...")
                     text = self.recognizer.recognize_google(audio)
                     logger.info(f"✨ Recognized: {text}")
-                    
-                    # FIRE-AND-FORGET: Spawn thread, loop continues immediately
                     threading.Thread(target=self.execute_command, args=(text,), daemon=True).start()
-                    
                 except sr.UnknownValueError:
                     logger.debug("🔇 No speech")
                     continue
@@ -756,7 +928,6 @@ class LinnyAssistant:
                     continue
                     
             except Exception as e:
-                # CRITICAL: Never break the immortal loop
                 logger.exception(f"[LOOP ERROR] {e}")
                 try:
                     self.voice.speak("I encountered a glitch, but I'm back online.")
@@ -771,7 +942,6 @@ class LinnyAssistant:
             try:
                 self._audio_source = self.microphone.__enter__()
                 logger.info("✓ Audio source opened")
-                
                 self.recognizer.adjust_for_ambient_noise(self._audio_source, duration=1)
                 self.recognizer.pause_threshold = 0.8
                 self.recognizer.dynamic_energy_threshold = False
@@ -813,9 +983,10 @@ class LinnyApp:
         self.voice = VoiceEngine(self.config.get("voice_en", "en-PH-RosaNeural"))
         self.calendar = CalendarManager(self.config.get("timezone", "Asia/Manila"))
         self.brain = BrainManager(self.config)
+        self.lights = LightManager(self.config.get("smart_bulb_ip", "192.168.1.100"))
         
         # CORE: LinnyAssistant handles all logic
-        self.assistant = LinnyAssistant(self.config, self.voice, self.calendar, self.brain)
+        self.assistant = LinnyAssistant(self.config, self.voice, self.calendar, self.brain, self.lights)
         
         # GUI
         if not headless:
@@ -837,23 +1008,28 @@ class LinnyApp:
             logger.warning(f"Priority failed: {e}")
     
     def _load_config(self):
-        """Load config"""
+        """Load config, use defaults if not found"""
         if CONFIG_FILE.exists():
             try:
                 with open(CONFIG_FILE, 'r') as f:
                     return json.load(f)
             except json.JSONDecodeError as e:
                 logger.error(f"Config JSON error: {e}")
-                sys.exit(1)
+                return DEFAULT_CONFIG
         else:
-            logger.error(f"Config not found: {CONFIG_FILE}")
-            sys.exit(1)
+            logger.warning(f"Config not found, using defaults: {CONFIG_FILE}")
+            self._save_config_impl(DEFAULT_CONFIG)
+            return DEFAULT_CONFIG
     
-    def _save_config(self):
+    def _save_config_impl(self, config):
         """Save config"""
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(CONFIG_FILE, 'w') as f:
-            json.dump(self.config, f, indent=2)
+            json.dump(config, f, indent=2)
+    
+    def _save_config(self):
+        """Save config"""
+        self._save_config_impl(self.config)
     
     def _setup_gui(self):
         """Setup GUI"""
@@ -861,11 +1037,11 @@ class LinnyApp:
         ctk.set_default_color_theme("blue")
         
         self.root = ctk.CTk()
-        self.root.title("L.I.N.N.Y. v8.0 - Dashboard")
-        self.root.geometry("800x650")
+        self.root.title("L.I.N.N.Y. v9.0 - Dashboard")
+        self.root.geometry("800x700")
         
         # Header
-        header = ctk.CTkLabel(self.root, text="L.I.N.N.Y. v8.0", font=("Arial", 24, "bold"))
+        header = ctk.CTkLabel(self.root, text="L.I.N.N.Y. v9.0", font=("Arial", 24, "bold"))
         header.pack(pady=20)
         
         # Status
@@ -890,26 +1066,27 @@ class LinnyApp:
         lang_menu = ctk.CTkOptionMenu(settings_frame, variable=self.lang_var, values=["English", "Tagalog"], width=300)
         lang_menu.grid(row=2, column=1, padx=10, pady=5)
         
+        # Smart Bulb IP
+        ctk.CTkLabel(settings_frame, text="Smart Bulb IP:").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+        self.bulb_ip_entry = ctk.CTkEntry(settings_frame, width=300)
+        self.bulb_ip_entry.insert(0, self.config.get("smart_bulb_ip", "192.168.1.100"))
+        self.bulb_ip_entry.grid(row=3, column=1, padx=10, pady=5)
+        
         # API Keys
-        ctk.CTkLabel(settings_frame, text="Groq API Key:").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(settings_frame, text="Groq API Key:").grid(row=4, column=0, sticky="w", padx=10, pady=5)
         self.groq_entry = ctk.CTkEntry(settings_frame, width=300, show="*")
         self.groq_entry.insert(0, self.config.get("groq_api_key", ""))
-        self.groq_entry.grid(row=3, column=1, padx=10, pady=5)
+        self.groq_entry.grid(row=4, column=1, padx=10, pady=5)
         
-        ctk.CTkLabel(settings_frame, text="Gemini API Key:").grid(row=4, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(settings_frame, text="Gemini API Key:").grid(row=5, column=0, sticky="w", padx=10, pady=5)
         self.gemini_entry = ctk.CTkEntry(settings_frame, width=300, show="*")
         self.gemini_entry.insert(0, self.config.get("gemini_api_key", ""))
-        self.gemini_entry.grid(row=4, column=1, padx=10, pady=5)
+        self.gemini_entry.grid(row=5, column=1, padx=10, pady=5)
         
-        ctk.CTkLabel(settings_frame, text="Perplexity API Key:").grid(row=5, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(settings_frame, text="Perplexity API Key:").grid(row=6, column=0, sticky="w", padx=10, pady=5)
         self.perplexity_entry = ctk.CTkEntry(settings_frame, width=300, show="*")
         self.perplexity_entry.insert(0, self.config.get("perplexity_api_key", ""))
-        self.perplexity_entry.grid(row=5, column=1, padx=10, pady=5)
-        
-        ctk.CTkLabel(settings_frame, text="OpenAI API Key:").grid(row=6, column=0, sticky="w", padx=10, pady=5)
-        self.openai_entry = ctk.CTkEntry(settings_frame, width=300, show="*")
-        self.openai_entry.insert(0, self.config.get("openai_api_key", ""))
-        self.openai_entry.grid(row=6, column=1, padx=10, pady=5)
+        self.perplexity_entry.grid(row=6, column=1, padx=10, pady=5)
         
         # Save Button
         save_btn = ctk.CTkButton(settings_frame, text="Save Settings", command=self._save_settings)
@@ -936,14 +1113,14 @@ class LinnyApp:
         """Save settings"""
         self.config["user_name"] = self.name_entry.get()
         self.config["language"] = self.lang_var.get()
+        self.config["smart_bulb_ip"] = self.bulb_ip_entry.get()
         self.config["groq_api_key"] = self.groq_entry.get()
         self.config["gemini_api_key"] = self.gemini_entry.get()
         self.config["perplexity_api_key"] = self.perplexity_entry.get()
-        self.config["openai_api_key"] = self.openai_entry.get()
         
         self._save_config()
         
-        # Reinit
+        # Reinit brain
         self.brain = BrainManager(self.config)
         self.assistant.brain = self.brain
         
