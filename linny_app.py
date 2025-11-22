@@ -682,6 +682,7 @@ class LinnyAssistant:
             "nini", "ninny", "ni",
             "ginny", "hinny", "finny", "vinny", "winny", "pinny",
             "lhinny",
+            "hey linny", "ok linny", "okay linny", "hi linny", "hello linny", "hey"
         ]
         
         if not any(w in text_lower for w in wake_words):
@@ -1129,7 +1130,7 @@ class LinnyApp:
         control_frame = ctk.CTkFrame(self.root)
         control_frame.pack(pady=10)
         
-        self.mute_btn = ctk.CTkButton(control_frame, text="Mute", command=self._toggle_mute, width=150)
+        self.mute_btn = ctk.CTkButton(control_frame, text="Mute", command=self._toggle_mute, width=150, fg_color="#2196f3")
         self.mute_btn.pack(side="left", padx=10)
         
         start_btn = ctk.CTkButton(control_frame, text="Start Listening", command=self._start_listening, width=150)
@@ -1178,11 +1179,23 @@ class LinnyApp:
             self.root.withdraw()
     
     def _toggle_mute(self):
-        """Toggle mute"""
+        """Toggle mute with feedback"""
         is_muted = self.assistant.toggle_mute()
         self.tray.update_state("muted" if is_muted else "listening")
+        
+        # Update button text and color
         if hasattr(self, 'mute_btn'):
-            self.mute_btn.configure(text="Unmute" if is_muted else "Mute")
+            if is_muted:
+                self.mute_btn.configure(text="Unmute", fg_color="#d32f2f")  # Red when muted
+            else:
+                self.mute_btn.configure(text="Mute", fg_color="#2196f3")    # Blue when active
+        
+        # Status feedback
+        if hasattr(self, 'status_label'):
+            status_text = "🔇 Muted" if is_muted else "🎤 Listening"
+            self.status_label.configure(text=f"Status: {status_text}")
+        
+        logger.info(f"🔇 Mute toggled: {is_muted}")
     
     def _start_listening(self):
         """Start listening"""
