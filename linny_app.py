@@ -770,7 +770,7 @@ class LinnyApp:
         text_lower = text.lower()
         
         # Wake word check
-        wake_words = ["linny", "lenny", "lini"]
+        wake_words = ["linny", "lenny", "lini", "mini", "lhinny"]
         if not any(wake in text_lower for wake in wake_words):
             return
         
@@ -877,7 +877,7 @@ class LinnyApp:
         # ========================================================================
         
         app_name = None
-        for verb in ["open", "launch", "start"]:
+        for verb in ["open", "launch", "start", "lunch"]:
             if verb in text_lower:
                 parts = text_lower.split(verb, 1)
                 if len(parts) > 1:
@@ -890,14 +890,20 @@ class LinnyApp:
             
             logger.info(f"🚀 Launching app: {app_name}")
             app_aliases = self.config.get("app_aliases", {})
-            command = app_aliases.get(app_name)
+            target_path = app_aliases.get(app_name, app_name)
             
             try:
-                if command:
-                    os.startfile(command)
-                    logger.info(f"✓ Launched {app_name} via alias")
+                # Silent launch: suppress all stdout/stderr to prevent console clutter
+                subprocess.Popen(
+                    target_path,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    shell=True
+                )
+                
+                if app_name in app_aliases:
+                    logger.info(f"✓ Launched {app_name} via alias: {target_path}")
                 else:
-                    os.startfile(app_name)
                     logger.info(f"✓ Launched {app_name} directly")
                 
                 self.tray.update_state("speaking")
