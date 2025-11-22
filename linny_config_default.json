@@ -1,0 +1,32 @@
+{
+    "language": "English",
+    "timezone": "Asia/Manila",
+    "user_name": "Zeus",
+    "voice_en": "en-PH-RosaNeural",
+    "voice_tl": "fil-PH-AngelNeural",
+    "groq_api_key": "",
+    "gemini_api_key": "",
+    "perplexity_api_key": "",
+    "smart_bulb_ip": "192.168.1.100",
+    "app_aliases": {
+        "code": "code",
+        "vs code": "C:\\Users\\Zeus\\AppData\\Local\\Programs\\Microsoft VS Code\\code.exe",
+        "browser": "C:\\Users\\Zeus\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+        "brave": "C:\\Users\\Zeus\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+        "spotify": "spotify:",
+        "apple music": "https://music.apple.com/us/new",
+        "calculator": "calc",
+        "notepad": "notepad",
+        "terminal": "wt",
+        "files": "explorer",
+        "explorer": "explorer",
+        "word": "winword",
+        "teams": "msteams:",
+        "microsoft teams": "msteams:",
+        "discord": "C:\\Users\\Zeus\\AppData\\Local\\Discord\\Update.exe --processStart Discord.exe",
+        "antigravity": "C:\\Users\\Zeus\\AppData\\Local\\Programs\\Antigravity\\Antigravity.exe",
+        "valorant": "E:\\GAMES\\Riot Games\\Riot Client\\RiotClientServices.exe --launch-product=valorant --launch-patchline=live",
+        "league": "E:\\GAMES\\Riot Games\\Riot Client\\RiotClientServices.exe --launch-product=league_of_legends --launch-patchline=live",
+        "lol": "E:\\GAMES\\Riot Games\\Riot Client\\RiotClientServices.exe --launch-product=league_of_legends --launch-patchline=live"
+    }
+}

@@ -89,40 +89,8 @@ logging.getLogger('kasa').setLevel(logging.WARNING)
 CONFIG_FILE = Path.home() / ".linny" / "linny_config.json"
 TOKEN_FILE = Path.home() / ".linny" / "token.json"
 CREDENTIALS_FILE = Path("credentials.json")
+DEFAULT_CONFIG_FILE = Path("linny_config_default.json")
 CALENDAR_SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
-
-DEFAULT_CONFIG = {
-    "language": "English",
-    "timezone": "Asia/Manila",
-    "user_name": "Zeus",
-    "voice_en": "en-PH-RosaNeural",
-    "voice_tl": "fil-PH-AngelNeural",
-    "groq_api_key": "",
-    "gemini_api_key": "",
-    "perplexity_api_key": "",
-    "smart_bulb_ip": "192.168.1.100",
-    "app_aliases": {
-        "code": "code",
-        "vs code": r"C:\Users\Zeus\AppData\Local\Programs\Microsoft VS Code\code.exe",
-        "browser": r"C:\Users\Zeus\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe",
-        "brave": r"C:\Users\Zeus\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe",
-        "spotify": "spotify:",
-        "apple music": "https://music.apple.com/us/new",
-        "calculator": "calc",
-        "notepad": "notepad",
-        "terminal": "wt",
-        "files": "explorer",
-        "explorer": "explorer",
-        "word": "winword",
-        "teams": "msteams:",
-        "microsoft teams": "msteams:",
-        "discord": r"C:\Users\Zeus\AppData\Local\Discord\Update.exe --processStart Discord.exe",
-        "antigravity": r"C:\Users\Zeus\AppData\Local\Programs\Antigravity\Antigravity.exe",
-        "valorant": r"E:\GAMES\Riot Games\Riot Client\RiotClientServices.exe --launch-product=valorant --launch-patchline=live",
-        "league": r"E:\GAMES\Riot Games\Riot Client\RiotClientServices.exe --launch-product=league_of_legends --launch-patchline=live",
-        "lol": r"E:\GAMES\Riot Games\Riot Client\RiotClientServices.exe --launch-product=league_of_legends --launch-patchline=live"
-    }
-}
 
 # ============================================================================
 # LIGHT MANAGER - Tapo L530E Smart Bulb
@@ -540,12 +508,13 @@ class TrayManager:
 class LinnyAssistant:
     """Handles listening, command processing, and logic"""
     
-    def __init__(self, config, voice, calendar, brain, lights):
+    def __init__(self, config, voice, calendar, brain, lights, tray=None):
         self.config = config
         self.voice = voice
         self.calendar = calendar
         self.brain = brain
         self.lights = lights
+        self.tray = tray
         
         self.is_listening = False
         self.is_muted = False
@@ -881,6 +850,14 @@ class LinnyAssistant:
                     logger.error(f"YouTube failed: {e}")
                     self.voice.speak("YouTube failed.")
                 return
+            
+        if "stop listening" in text_lower:
+            logger.info("🛑 Stop Listening Command Received")
+            self.voice.speak("Stopping listening. Goodbye!")
+            self.toggle_mute()
+            if self.tray:
+                self.tray.update_state("muted")
+            return
         
         # ====================================================================
         # PRIORITY 12: AI BRAIN (FALLBACK)
@@ -989,6 +966,7 @@ class LinnyAssistant:
         if self._audio_source:
             try:
                 self.microphone.__exit__(None, None, None)
+                
             except Exception as e:
                 logger.warning(f"Close audio failed: {e}")
     
@@ -1015,19 +993,21 @@ class LinnyApp:
         self.brain = BrainManager(self.config)
         self.lights = LightManager(self.config.get("smart_bulb_ip", "192.168.1.100"))
         
-        # CORE: LinnyAssistant handles all logic
-        self.assistant = LinnyAssistant(self.config, self.voice, self.calendar, self.brain, self.lights)
-        
-        # GUI
-        if not headless:
-            self._setup_gui()
-        
-        # Tray
+        # Tray (initialize before LinnyAssistant so it can reference it)
         self.tray = TrayManager(
             on_show=self._show_dashboard,
             on_mute=self._toggle_mute,
             on_exit=self._exit_app
         )
+        
+        # CORE: LinnyAssistant handles all logic with tray reference
+        self.assistant = LinnyAssistant(self.config, self.voice, self.calendar, self.brain, self.lights, self.tray)
+        
+        # GUI
+        if not headless:
+            self._setup_gui()
+        
+        # Start tray
         self.tray.start()
         
         # High priority
@@ -1037,6 +1017,29 @@ class LinnyApp:
         except Exception as e:
             logger.warning(f"Priority failed: {e}")
     
+    def _load_default_config(self):
+        """Load default config from JSON file"""
+        try:
+            if DEFAULT_CONFIG_FILE.exists():
+                with open(DEFAULT_CONFIG_FILE, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load default config: {e}")
+        
+        # Minimal fallback if file doesn't exist
+        return {
+            "language": "English",
+            "timezone": "Asia/Manila",
+            "user_name": "User",
+            "voice_en": "en-US-AriaNeural",
+            "voice_tl": "en-US-AriaNeural",
+            "groq_api_key": "",
+            "gemini_api_key": "",
+            "perplexity_api_key": "",
+            "smart_bulb_ip": "192.168.1.100",
+            "app_aliases": {}
+        }
+    
     def _load_config(self):
         """Load config, use defaults if not found"""
         if CONFIG_FILE.exists():
@@ -1045,11 +1048,14 @@ class LinnyApp:
                     return json.load(f)
             except json.JSONDecodeError as e:
                 logger.error(f"Config JSON error: {e}")
-                return DEFAULT_CONFIG
+                default = self._load_default_config()
+                self._save_config_impl(default)
+                return default
         else:
-            logger.warning(f"Config not found, using defaults: {CONFIG_FILE}")
-            self._save_config_impl(DEFAULT_CONFIG)
-            return DEFAULT_CONFIG
+            logger.warning(f"Config not found at {CONFIG_FILE}, loading defaults")
+            default = self._load_default_config()
+            self._save_config_impl(default)
+            return default
     
     def _save_config_impl(self, config):
         """Save config"""
