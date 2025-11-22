@@ -1,18 +1,31 @@
-customtkinter
-SpeechRecognition
-edge-tts
-pygame
-groq
-google-generativeai
-google-auth-oauthlib
-google-api-python-client
-pystray
-Pillow
-psutil
-python-dateutil
-pyautogui
-requests
-python-kasa
-keyboard
-pytz
-pywhatkit
+# L.I.N.N.Y. v9.0 - Voice Assistant Requirements
+
+# GUI & System
+customtkinter==5.2.2
+Pillow==10.1.0
+pystray==0.19.5
+psutil==5.9.6
+
+# Voice & Audio
+SpeechRecognition==3.10.0
+edge-tts==6.1.12
+pygame==2.5.2
+PyAutoGUI==0.9.54
+
+# AI Providers
+groq==0.4.2
+google-generativeai==0.3.0
+requests==2.31.0
+
+# Google Calendar
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
+google-api-python-client==2.108.0
+
+# Smart Home
+python-kasa==0.7.0.5
+
+# Utilities
+pytz==2024.1
+python-dateutil==2.8.2
+pywhatkit==6.4

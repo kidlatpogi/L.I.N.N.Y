@@ -46,6 +46,7 @@ Thumbs.db
 
 # Config & Secrets
 linny_config.json
+linny_config_default.json
 token.json
 credentials.json
 .linny/

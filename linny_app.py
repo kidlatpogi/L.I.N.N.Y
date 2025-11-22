@@ -23,7 +23,6 @@ import logging
 import subprocess
 import webbrowser
 import gc
-import shutil
 import time
 import requests
 import concurrent.futures
@@ -56,10 +55,9 @@ from googleapiclient.discovery import build
 
 # Smart Home
 try:
-    from kasa import SmartBulb, Discover
+    from kasa import SmartBulb
 except ImportError:
     SmartBulb = None
-    Discover = None
 
 # Utilities
 import pytz
@@ -99,7 +97,7 @@ class LightManager:
     """Control Tapo L530E smart bulb via kasa"""
     
     def __init__(self, ip_address=None):
-        self.ip = ip_address or "192.168.1.100"
+        self.ip = ip_address or "<BULB_IP>"
         self.bulb = None
         self._connect()
     
@@ -991,7 +989,7 @@ class LinnyApp:
         self.voice = VoiceEngine(self.config.get("voice_en", "en-PH-RosaNeural"))
         self.calendar = CalendarManager(self.config.get("timezone", "Asia/Manila"))
         self.brain = BrainManager(self.config)
-        self.lights = LightManager(self.config.get("smart_bulb_ip", "192.168.1.100"))
+        self.lights = LightManager(self.config.get("smart_bulb_ip", "<BULB_IP>"))
         
         # Tray (initialize before LinnyAssistant so it can reference it)
         self.tray = TrayManager(
@@ -1029,14 +1027,14 @@ class LinnyApp:
         # Minimal fallback if file doesn't exist
         return {
             "language": "English",
-            "timezone": "Asia/Manila",
+            "timezone": "UTC",
             "user_name": "User",
             "voice_en": "en-US-AriaNeural",
             "voice_tl": "en-US-AriaNeural",
             "groq_api_key": "",
             "gemini_api_key": "",
             "perplexity_api_key": "",
-            "smart_bulb_ip": "192.168.1.100",
+            "smart_bulb_ip": "<BULB_IP>",
             "app_aliases": {}
         }
     
@@ -1105,7 +1103,7 @@ class LinnyApp:
         # Smart Bulb IP
         ctk.CTkLabel(settings_frame, text="Smart Bulb IP:").grid(row=3, column=0, sticky="w", padx=10, pady=5)
         self.bulb_ip_entry = ctk.CTkEntry(settings_frame, width=300)
-        self.bulb_ip_entry.insert(0, self.config.get("smart_bulb_ip", "192.168.1.100"))
+        self.bulb_ip_entry.insert(0, self.config.get("smart_bulb_ip", "<BULB_IP>"))
         self.bulb_ip_entry.grid(row=3, column=1, padx=10, pady=5)
         
         # API Keys
@@ -1210,6 +1208,76 @@ class LinnyApp:
         if hasattr(self, 'status_label'):
             self.status_label.configure(text="Status: Listening...")
     
+    def startup_sequence(self):
+        """
+        Robust startup sequence:
+        1. Wait for audio drivers
+        2. Get timezone and current time
+        3. Build greeting with date, time, and smart schedule
+        4. Speak greeting
+        5. Lock workstation
+        6. Start listening
+        """
+        logger.info("🚀 Starting Linny startup sequence...")
+        
+        try:
+            # Step 1: Wait for Windows Audio drivers to initialize
+            logger.info("⏳ Waiting 2s for audio drivers...")
+            time.sleep(2)
+            
+            # Step 2: Get timezone and current time
+            tz = pytz.timezone(self.config.get("timezone", "Asia/Manila"))
+            now = datetime.now(tz)
+            
+            # Step 3: Build greeting
+            hour = now.hour
+            if 5 <= hour < 12:
+                greeting_prefix = "Good morning"
+            elif 12 <= hour < 18:
+                greeting_prefix = "Good afternoon"
+            else:
+                greeting_prefix = "Good evening"
+            
+            user_name = self.config.get("user_name", "User")
+            greeting = f"{greeting_prefix}, {user_name}."
+            
+            # Format date and time
+            date_str = now.strftime("%A, %B %d")
+            time_str = now.strftime("%I:%M %p")
+            datetime_msg = f"It is {date_str}, at {time_str}."
+            
+            # Get smart schedule
+            try:
+                schedule_msg = self.calendar.get_schedule("")
+            except Exception as e:
+                logger.warning(f"Could not fetch schedule: {e}")
+                schedule_msg = "Calendar is offline."
+            
+            # Combine all messages
+            full_greeting = f"{greeting} {datetime_msg} {schedule_msg}"
+            
+            logger.info(f"✨ Greeting: {full_greeting}")
+            
+            # Step 4: Speak greeting
+            self.voice.speak(full_greeting)
+            
+            # Step 5: Lock workstation
+            try:
+                logger.info("🔒 Locking workstation...")
+                ctypes.windll.user32.LockWorkStation()
+            except Exception as e:
+                logger.warning(f"Could not lock workstation: {e}")
+            
+            # Step 6: Start listening immediately
+            logger.info("🎤 Starting listener...")
+            self._start_listening()
+            
+            logger.info("✓ Startup sequence complete")
+            
+        except Exception as e:
+            logger.error(f"Startup sequence error: {e}")
+            self._start_listening()
+    
     def _exit_app(self):
         """Exit"""
         logger.info("Exiting...")
@@ -1234,11 +1302,14 @@ class LinnyApp:
 # ENTRY POINT
 # ============================================================================
 def main():
-    """Main entry"""
+    """Main entry point - runs startup sequence then app"""
     headless = "--startup" in sys.argv
     app = LinnyApp(headless=headless)
-    if not headless:
-        app._start_listening()
+    
+    # Run startup sequence
+    app.startup_sequence()
+    
+    # Run main app loop
     app.run()
 
 if __name__ == "__main__":
