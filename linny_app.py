@@ -607,7 +607,12 @@ class LinnyAssistant:
             self.voice.speak("Timer failed.")
     
     def _launch_app(self, app_name):
-        """Hybrid app launcher: Shell for games with args, os.startfile for simple apps"""
+        """
+        Smart App Launcher with 3-case logic:
+        Case A: URL (http/www) → webbrowser.open()
+        Case B: System App/Protocol (no args) → os.startfile()
+        Case C: Complex Command (args/spaces) → subprocess.Popen(shell=True)
+        """
         app_name_lower = app_name.lower()
         app_aliases = self.config.get("app_aliases", {})
         target = app_aliases.get(app_name_lower, app_name_lower)
@@ -615,24 +620,48 @@ class LinnyAssistant:
         logger.info(f"🚀 Launching: {app_name}")
         
         try:
-            # Check if command has arguments (games, special executables)
+            # ================================================================
+            # CASE A: URL (starts with http or www)
+            # ================================================================
+            if target.startswith("http://") or target.startswith("https://") or target.startswith("www"):
+                logger.info(f"📡 Case A: URL → {target}")
+                webbrowser.open(target)
+                self.voice.speak(f"Opening {app_name}.")
+                return
+            
+            # ================================================================
+            # CASE B: System App / Protocol (no arguments)
+            # ================================================================
             has_args = any(arg in target for arg in ["--", "/", " -"])
             
-            if has_args:
-                # Use shell for complex commands with arguments
-                logger.debug(f"Using shell: {target}")
-                subprocess.Popen(
-                    f'"{target}"',
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    shell=True
-                )
-            else:
-                # Use os.startfile for simple apps/protocols
-                logger.debug(f"Using startfile: {target}")
+            if not has_args:
+                logger.info(f"💻 Case B: System App → {target}")
                 os.startfile(target)
+                self.voice.speak(f"Opening {app_name}.")
+                return
+            
+            # ================================================================
+            # CASE C: Complex Command (with arguments like Riot Client)
+            # ================================================================
+            logger.info(f"⚙️ Case C: Complex Command → {target}")
+            
+            # For Riot Client commands, do NOT suppress output (keeps launcher alive)
+            is_riot_client = "riotclient" in target.lower()
+            
+            if is_riot_client:
+                logger.debug("🎮 Riot Client detected - preserving output streams")
+                subprocess.Popen(target, shell=True)
+            else:
+                # For other commands, suppress output
+                subprocess.Popen(
+                    target,
+                    shell=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
             
             self.voice.speak(f"Opening {app_name}.")
+        
         except Exception as e:
             logger.error(f"Failed to launch {app_name}: {e}")
             self.voice.speak(f"Couldn't find {app_name}.")
@@ -647,10 +676,10 @@ class LinnyAssistant:
         
         # Wake word check
         wake_words = [
-            "linny", "lenny", "lini", "leni", "linnie", "lynny",
+            "linny", "lenny", "lini", "leni", "linnie", "lynny", "lanny", "leave me", "lily",
             "mini", "minny", "minnie", "mimi",
             "dini", "dinny",
-            "nini", "ninny",
+            "nini", "ninny", "ni",
             "ginny", "hinny", "finny", "vinny", "winny", "pinny",
             "lhinny",
         ]
