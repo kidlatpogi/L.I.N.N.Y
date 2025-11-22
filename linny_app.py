@@ -1,6 +1,13 @@
 """
 L.I.N.N.Y. v8.0 - Loyal Intelligent Neural Network for You
 Complete Rewrite: Strict Class Separation, Hardcoded-First, Non-Blocking
+
+Architecture:
+- VoiceEngine: TTS only, manages is_speaking flag
+- LinnyAssistant: Core logic, listening, command execution (checks voice.is_speaking)
+- LinnyApp: GUI + Tray only, delegates to LinnyAssistant
+- Immortal listener: Daemon thread, never breaks, fire-and-forget execution
+- Hardcoded-first: 10-level priority before AI fallback
 """
 
 import os
@@ -58,6 +65,13 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("LINNY")
+
+# Silence verbose libraries
+logging.getLogger('googleapiclient').setLevel(logging.ERROR)
+logging.getLogger('googleapiclient.discovery_cache').setLevel(logging.ERROR)
+logging.getLogger('googleapiclient.discovery').setLevel(logging.ERROR)
+logging.getLogger('urllib3').setLevel(logging.ERROR)
+logging.getLogger('PIL').setLevel(logging.ERROR)
 
 # ============================================================================
 # CONSTANTS
@@ -217,22 +231,42 @@ class CalendarManager:
         except Exception as e:
             logger.warning(f"Could not find School calendar: {e}")
     
-    def get_schedule(self):
-        """Get today's schedule with smart filtering"""
+    def get_schedule(self, query=""):
+        """Get schedule with smart intent detection
+        - If 'tomorrow' or 'bukas' in query: Return ONLY tomorrow's events
+        - Else: Smart switch (today's remaining -> if empty, tomorrow)
+        """
         if not self.service:
             return "Calendar not configured."
         
         try:
             now = datetime.now(self.timezone)
-            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            today_end = today_start + timedelta(days=1)
+            
+            # INTENT DETECTION: Tomorrow request?
+            query_lower = query.lower() if query else ""
+            is_tomorrow_request = any(w in query_lower for w in ["tomorrow", "bukas", "next day"])
+            
+            if is_tomorrow_request:
+                # TOMORROW: Set date range to tomorrow 00:00 - 23:59
+                logger.info("📅 Tomorrow schedule requested")
+                target_day = now + timedelta(days=1)
+                day_start = target_day.replace(hour=0, minute=0, second=0, microsecond=0)
+                day_end = day_start + timedelta(days=1)
+                label = "tomorrow"
+            else:
+                # TODAY (Smart Switch): Check today first
+                logger.info("📅 Today/Smart schedule requested")
+                day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                day_end = day_start + timedelta(days=1)
+                label = "today"
             
             cal_id = self.school_cal_id or 'primary'
             
+            # Fetch events for the selected day
             events_result = self.service.events().list(
                 calendarId=cal_id,
-                timeMin=today_start.isoformat(),
-                timeMax=today_end.isoformat(),
+                timeMin=day_start.isoformat(),
+                timeMax=day_end.isoformat(),
                 singleEvents=True,
                 orderBy='startTime'
             ).execute()
@@ -254,7 +288,9 @@ class CalendarManager:
                 if end_t.tzinfo is None:
                     end_t = self.timezone.localize(end_t)
                 
-                if end_t < now:
+                # For today: skip past events, keep ongoing/upcoming
+                # For tomorrow: show all events
+                if label == "today" and end_t < now:
                     continue
                 elif start_t < now < end_t:
                     ongoing.append((event, start_t, end_t))
@@ -263,10 +299,16 @@ class CalendarManager:
             
             active = ongoing + upcoming
             
-            if not active:
-                return "You have no more schedule for today."
+            # SMART SWITCH: If today is empty and not explicitly requested, try tomorrow
+            if not active and label == "today" and not is_tomorrow_request:
+                logger.info("📅 Today empty, switching to tomorrow")
+                return self.get_schedule("tomorrow")  # Recursive call for tomorrow
             
-            summary = f"You have {len(active)} event(s) remaining:\n"
+            if not active:
+                return f"You have no schedule for {label}."
+            
+            day_name = "Tomorrow" if label == "tomorrow" else "Today"
+            summary = f"{day_name}: {len(active)} event(s)\n"
             for event, start_t, end_t in active[:5]:
                 name = event.get('summary', 'Untitled')
                 if start_t < now < end_t:
@@ -459,7 +501,15 @@ class LinnyAssistant:
         text_lower = text.lower()
         
         # Wake word check
-        wake_words = ["linny", "lenny", "lini", "mini", "lhinny"]
+        wake_words = [
+            "linny", "lenny", "lini", "leni", "linnie", "lynny",
+            "mini", "minny", "minnie", "mimi",
+            "dini", "dinny",
+            "nini", "ninny",
+            "ginny", "hinny", "finny", "vinny", "winny", "pinny",
+            "lhinny",
+        ]
+
         if not any(w in text_lower for w in wake_words):
             logger.debug(f"No wake word in: {text}")
             return
@@ -574,7 +624,7 @@ class LinnyAssistant:
         
         if any(w in text_lower for w in ["schedule", "calendar", "agenda"]):
             logger.info("📅 Schedule")
-            schedule = self.calendar.get_schedule()
+            schedule = self.calendar.get_schedule(query=text)  # Pass query for intent detection
             self.voice.speak(schedule)
             return
         
@@ -856,13 +906,18 @@ class LinnyApp:
         self.perplexity_entry.insert(0, self.config.get("perplexity_api_key", ""))
         self.perplexity_entry.grid(row=5, column=1, padx=10, pady=5)
         
+        ctk.CTkLabel(settings_frame, text="OpenAI API Key:").grid(row=6, column=0, sticky="w", padx=10, pady=5)
+        self.openai_entry = ctk.CTkEntry(settings_frame, width=300, show="*")
+        self.openai_entry.insert(0, self.config.get("openai_api_key", ""))
+        self.openai_entry.grid(row=6, column=1, padx=10, pady=5)
+        
         # Save Button
         save_btn = ctk.CTkButton(settings_frame, text="Save Settings", command=self._save_settings)
-        save_btn.grid(row=6, column=0, columnspan=2, pady=10)
+        save_btn.grid(row=7, column=0, columnspan=2, pady=10)
         
         # Edit Aliases Button
         edit_btn = ctk.CTkButton(settings_frame, text="Edit App Aliases", command=self._edit_aliases)
-        edit_btn.grid(row=7, column=0, columnspan=2, pady=10)
+        edit_btn.grid(row=8, column=0, columnspan=2, pady=10)
         
         # Control Frame
         control_frame = ctk.CTkFrame(self.root)
@@ -884,6 +939,7 @@ class LinnyApp:
         self.config["groq_api_key"] = self.groq_entry.get()
         self.config["gemini_api_key"] = self.gemini_entry.get()
         self.config["perplexity_api_key"] = self.perplexity_entry.get()
+        self.config["openai_api_key"] = self.openai_entry.get()
         
         self._save_config()
         
