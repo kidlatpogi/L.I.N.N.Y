@@ -43,3 +43,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Config & Secrets
+linny_config.json
+token.json
+credentials.json
+.linny/
