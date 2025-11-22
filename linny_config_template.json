@@ -1,0 +1,19 @@
+{
+  "language": "English",
+  "timezone": "Asia/Manila",
+  "user_name": "Zeus",
+  "voice_en": "en-PH-RosaNeural",
+  "voice_tl": "fil-PH-AngelNeural",
+  "groq_api_key": "YOUR_GROQ_API_KEY_HERE",
+  "gemini_api_key": "YOUR_GEMINI_API_KEY_HERE",
+  "openai_api_key": "YOUR_OPENAI_API_KEY_HERE",
+  "app_aliases": {
+    "discord": "C:\\Users\\Zeus\\AppData\\Local\\Discord\\app-1.0.9215\\Discord.exe",
+    "valorant": "C:\\Riot Games\\VALORANT\\live\\ShooterGame\\Binaries\\Win64\\VALORANT.exe",
+    "vs code": "C:\\Users\\Zeus\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+    "notepad": "notepad.exe",
+    "calculator": "calc.exe",
+    "paint": "mspaint.exe",
+    "spotify": "C:\\Users\\Zeus\\AppData\\Roaming\\Spotify\\Spotify.exe"
+  }
+}
