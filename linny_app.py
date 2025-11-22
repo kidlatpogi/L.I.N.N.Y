@@ -398,10 +398,14 @@ class VoiceEngine:
         self.is_speaking = False
     
     def speak(self, text, callback=None):
-        """Speak text asynchronously"""
+        """Speak text asynchronously - CRITICAL: is_speaking MUST be True before TTS starts"""
         def _speak_thread():
-            self.is_speaking = True
             try:
+                # CRITICAL: Set is_speaking=True BEFORE any TTS generation
+                # This ensures the listening loop knows NOT to capture audio
+                self.is_speaking = True
+                logger.debug("🔒 Audio locked (is_speaking=True)")
+                
                 # Generate TTS
                 temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
                 temp_path = temp_file.name
@@ -412,9 +416,13 @@ class VoiceEngine:
                 # Play with pygame
                 pygame.mixer.music.load(temp_path)
                 pygame.mixer.music.play()
+                logger.debug("▶️ Playback started")
                 
+                # CRITICAL: Keep is_speaking=True until audio playback is COMPLETELY done
                 while pygame.mixer.music.get_busy():
                     pygame.time.Clock().tick(10)
+                
+                logger.debug("⏹️ Playback finished")
                 
                 # Cleanup
                 pygame.mixer.music.unload()
@@ -423,7 +431,9 @@ class VoiceEngine:
             except Exception as e:
                 logger.error(f"TTS error: {e}")
             finally:
+                # CRITICAL: Only set is_speaking=False AFTER audio is completely done
                 self.is_speaking = False
+                logger.debug("🔓 Audio unlocked (is_speaking=False)")
                 if callback:
                     callback()
         
@@ -987,17 +997,22 @@ class LinnyApp:
         self.voice.speak(response, lambda: self.tray.update_state("listening"))
     
     def _listen_loop(self):
-        """Robust non-blocking listening loop - persistent audio source, immediate thread dispatch."""
-        logger.info("🎤 Listening started (robust mode)...")
+        """Robust non-blocking listening loop with STRICT AUDIO LOCKING.
+        CRITICAL: Microphone is BLOCKED while TTS is speaking to prevent self-hearing.
+        """
+        logger.info("🎤 Listening started (robust mode with audio locking)...")
         source = self._audio_source
         cycle_count = 0
         
         while self.is_listening:
             try:
-                # Quick skip if muted (don't block, small sleep to avoid spin)
-                if self.is_muted:
-                    time.sleep(0.05)
-                    continue
+                # STRICT AUDIO LOCKING: Wait until voice engine is done speaking
+                # This prevents Linny from hearing her own voice
+                while self.is_speaking or self.is_muted:
+                    logger.debug(f"🔒 Audio locked (speaking={self.is_speaking}, muted={self.is_muted})")
+                    time.sleep(0.1)
+                
+                # Only NOW do we proceed to listen
                 
                 # Memory optimization
                 cycle_count += 1
