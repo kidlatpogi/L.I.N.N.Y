@@ -523,7 +523,7 @@ class LinnyAssistant:
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
     
     def _get_weather(self):
-        """Fetch weather from Open-Meteo"""
+        """Fetch weather from Open-Meteo with contextual advice"""
         try:
             url = "https://api.open-meteo.com/v1/forecast?latitude=14.32&longitude=120.93&current_weather=true&timezone=Asia%2FManila"
             resp = requests.get(url, timeout=5)
@@ -537,20 +537,28 @@ class LinnyAssistant:
                 return "I couldn't read the temperature."
             
             condition = 'unknown'
+            advice = ''
+            
             if code == 0:
                 condition = 'clear'
+                advice = 'Wear sunscreen.'
             elif code in (1, 2, 3):
                 condition = 'cloudy'
+                advice = 'It might rain later, consider bringing an umbrella.'
             elif 45 <= code <= 48:
                 condition = 'foggy'
+                advice = 'Drive carefully, visibility is low.'
             elif 50 <= code <= 67 or 80 <= code <= 86:
                 condition = 'rainy'
+                advice = 'Bring an umbrella.'
             elif code >= 95:
                 condition = 'thunderstorms'
+                advice = 'Stay indoors if possible.'
             else:
                 condition = 'cloudy'
+                advice = 'Have a great day.'
             
-            return f"It is {round(temp)} degrees and {condition}."
+            return f"It is {round(temp)} degrees and {condition}. {advice}"
         except Exception as e:
             logger.warning(f"Weather failed: {e}")
             return "Could not get weather."
@@ -579,12 +587,26 @@ class LinnyAssistant:
         Case A: URL (http/www) → webbrowser.open()
         Case B: System App/Protocol (no args) → os.startfile()
         Case C: Complex Command (args/spaces) → subprocess.Popen(shell=True)
+        
+        Mutes mic immediately to prevent echo, unmutes 2s after TTS completes.
         """
         app_name_lower = app_name.lower()
         app_aliases = self.config.get("app_aliases", {})
         target = app_aliases.get(app_name_lower, app_name_lower)
         
         logger.info(f"🚀 Launching: {app_name}")
+        
+        # MUTE IMMEDIATELY to prevent echo detection
+        self.is_muted = True
+        logger.debug("🔇 App launch: Mic muted immediately")
+        time.sleep(0.15)  # Give listening loop time to detect mute flag
+        
+        def _post_launch_unmute():
+            """Callback to unmute mic 2 seconds after TTS completes"""
+            logger.debug("⏳ App launch: 2-second delay before unmute")
+            time.sleep(2)
+            self.is_muted = False
+            logger.debug("✓ App launch: Mic unmuted")
         
         try:
             # ================================================================
@@ -593,7 +615,7 @@ class LinnyAssistant:
             if target.startswith("http://") or target.startswith("https://") or target.startswith("www"):
                 logger.info(f"📡 Case A: URL → {target}")
                 webbrowser.open(target)
-                self.voice.speak(f"Opening {app_name}.")
+                self.voice.speak(f"Opening {app_name}.", callback=_post_launch_unmute)
                 return
             
             # ================================================================
@@ -604,7 +626,7 @@ class LinnyAssistant:
             if not has_args:
                 logger.info(f"💻 Case B: System App → {target}")
                 os.startfile(target)
-                self.voice.speak(f"Opening {app_name}.")
+                self.voice.speak(f"Opening {app_name}.", callback=_post_launch_unmute)
                 return
             
             # ================================================================
@@ -627,17 +649,17 @@ class LinnyAssistant:
                     stderr=subprocess.DEVNULL
                 )
             
-            self.voice.speak(f"Opening {app_name}.")
+            self.voice.speak(f"Opening {app_name}.", callback=_post_launch_unmute)
         
         except Exception as e:
             logger.error(f"Failed to launch {app_name}: {e}")
-            self.voice.speak(f"Couldn't find {app_name}.")
+            self.voice.speak(f"Couldn't find {app_name}.", callback=_post_launch_unmute)
     
     def execute_command(self, text):
         """
         HARDCODED-FIRST COMMAND EXECUTION
         Priority 1: System | 2: Media | 3: Lights | 4: Apps | 5: Time | 6: Date |
-                   7: Calendar | 8: Weather | 9: Timer | 10: Clip | 11: YouTube | 12: AI
+                 7: Calendar | 8: Weather | 9: Timer | 10: Clip | 11: YouTube | 12: AI
         """
         text_lower = text.lower()
         
@@ -901,6 +923,12 @@ class LinnyAssistant:
                 try:
                     logger.debug("⏺️ Listening...")
                     audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=8)
+                    
+                    # CRITICAL: Discard audio if captured during TTS or while muted
+                    if self.voice.is_speaking or self.is_muted:
+                        logger.debug("🗑️ Discarding audio captured during TTS/mute")
+                        continue
+                        
                 except sr.WaitTimeoutError:
                     logger.debug("⏳ Timeout")
                     continue
@@ -1253,8 +1281,15 @@ class LinnyApp:
                 logger.warning(f"Could not fetch schedule: {e}")
                 schedule_msg = "Calendar is offline."
             
+            # Get weather
+            try:
+                weather_msg = self.assistant._get_weather()
+            except Exception as e:
+                logger.warning(f"Could not fetch weather: {e}")
+                weather_msg = ""
+            
             # Combine all messages
-            full_greeting = f"{greeting} {datetime_msg} {schedule_msg}"
+            full_greeting = f"{greeting} {datetime_msg} {weather_msg} {schedule_msg}"
             
             logger.info(f"✨ Greeting: {full_greeting}")
             
