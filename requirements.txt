@@ -1,10 +1,14 @@
 # L.I.N.N.Y. v9.0 - Voice Assistant Requirements
 
 # GUI & System
+# L.I.N.N.Y. v9.0 - Voice Assistant Requirements
+
+# GUI & System
 customtkinter==5.2.2
 Pillow==10.1.0
 pystray==0.19.5
 psutil==5.9.6
+keyboard==0.13.5
 
 # Voice & Audio
 SpeechRecognition==3.10.0
