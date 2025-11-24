@@ -1248,9 +1248,27 @@ class LinnyApp:
             logger.error(f"Failed to open editor: {e}")
     
     def _show_dashboard(self):
-        """Show GUI"""
-        if hasattr(self, 'root'):
+        """Show GUI (create on-demand if in headless mode)"""
+        if not hasattr(self, 'root'):
+            # GUI was never created (headless mode) - create it now
+            logger.info("📊 Creating dashboard on-demand...")
+            self._setup_gui()
+            
+            # Start the GUI mainloop in a separate thread to avoid blocking
+            def _run_gui():
+                try:
+                    self.root.mainloop()
+                except Exception as e:
+                    logger.error(f"GUI mainloop error: {e}")
+            
+            threading.Thread(target=_run_gui, daemon=True).start()
+            logger.info("✓ Dashboard created and shown")
+        else:
+            # GUI already exists, just show it
             self.root.deiconify()
+            self.root.lift()  # Bring to front
+            self.root.focus_force()  # Give it focus
+            logger.info("✓ Dashboard shown")
     
     def _hide_dashboard(self):
         """Hide GUI"""
