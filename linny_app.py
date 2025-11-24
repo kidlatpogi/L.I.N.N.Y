@@ -702,14 +702,26 @@ class LinnyAssistant:
         
         if any(w in text_lower for w in ["shutdown", "shut down"]):
             logger.info("⚡ System: Shutdown")
-            self.voice.speak("Shutting down the system.")
+            self.voice.speak("Shutting down the System.")
             threading.Timer(3.0, lambda: os.system("shutdown /s /t 0")).start()
+            return
+        
+        if any(w in text_lower for w in ["reboot", "restart", "Reboot", "Restart"]):
+            logger.info("⚡ System: Reboot")
+            self.voice.speak("Rebooting the System.")
+            threading.Timer(3.0, lambda: os.system("shutdown /r /t 0")).start()
             return
         
         if "lock" in text_lower and any(w in text_lower for w in ["computer", "pc"]):
             logger.info("🔒 System: Lock")
-            self.voice.speak("Locking workstation.")
+            self.voice.speak("Locking the System.")
             threading.Timer(1.0, lambda: ctypes.windll.user32.LockWorkStation()).start()
+            return
+        
+        if "sleep" in text_lower and any(w in text_lower for w in ["computer", "pc"]):
+            logger.info("💤 System: Sleep")
+            self.voice.speak("Putting the System to sleep.")
+            threading.Timer(1.0, lambda: os.system("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")).start()
             return
         
         # ====================================================================
@@ -758,13 +770,13 @@ class LinnyAssistant:
         # PRIORITY 3: SMART LIGHT CONTROLS
         # ====================================================================
         
-        if any(w in text_lower for w in ["turn on lights", "lights on", "turn on the lights"]):
+        if any(w in text_lower for w in ["turn on lights", "lights on", "turn on the lights", "buksan ilaw", "buksan ang ilaw"]):
             logger.info("💡 Lights: On")
             self.lights.turn_on()
             self.voice.speak("Lights turned on.")
             return
         
-        if any(w in text_lower for w in ["turn off lights", "lights off", "turn off the lights"]):
+        if any(w in text_lower for w in ["turn off lights", "lights off", "turn off the lights", "patayin ilaw", "patayin ang ilaw", "patay ilaw"]):
             logger.info("💡 Lights: Off")
             self.lights.turn_off()
             self.voice.speak("Lights turned off.")
@@ -853,13 +865,13 @@ class LinnyAssistant:
         # PRIORITY 9: TIMER
         # ====================================================================
         
-        if "timer" in text_lower:
+        if any(w in text_lower for w in ["timer", "set timer", "pomodoro", "set a timer"]):
             logger.info("⏱️ Timer")
             self._start_timer(text_lower)
             return
         
         # ====================================================================
-        # PRIORITY 10: CLIP
+        # PRIORITY 10: CLIP and SCREENSHOT
         # ====================================================================
         
         if any(w in text_lower for w in ["clip that", "record that"]):
@@ -868,6 +880,22 @@ class LinnyAssistant:
             self.voice.speak("Clipped.")
             return
         
+        if any(w in text_lower for w in ["screenshot", "take a screenshot", "capture screen", "take screenshot"]):
+            logger.info("📸 Screenshot")
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            
+            folder_path = Path(self.config.get("screenshot_folder", Path.home() / "Pictures" / "Screenshots"))
+            try:
+                folder_path.mkdir(parents=True, exist_ok=True)
+                file_path = folder_path / f"screenshot_{timestamp}.png"
+                pyautogui.screenshot(str(file_path))
+                time.sleep(1)
+                self.voice.speak("Fullscreen screenshot taken.")
+            except Exception as e:
+                logger.error(f"Screenshot failed: {e}")
+                self.voice.speak("I couldn't take the screenshot.")
+            return
+
         # ====================================================================
         # PRIORITY 11: PLAY ON YOUTUBE
         # ====================================================================
