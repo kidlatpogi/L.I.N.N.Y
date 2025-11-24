@@ -541,7 +541,7 @@ class LinnyAssistant:
     def _get_weather(self):
         """Fetch weather from Open-Meteo with contextual advice"""
         try:
-            url = "https://api.open-meteo.com/v1/forecast?latitude=14.32&longitude=120.93&current_weather=true&timezone=Asia%2FManila"
+            url = "https://api.open-meteo.com/v1/forecast?latitude=14.2800&longitude=120.9969&current_weather=true&timezone=Asia%2FManila"
             resp = requests.get(url, timeout=5)
             resp.raise_for_status()
             data = resp.json()
