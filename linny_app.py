@@ -1,6 +1,6 @@
 """
-L.I.N.N.Y. v9.0 - Loyal Intelligent Neural Network for You
-Production-Ready: Smart Bulb Integration, Hybrid App Launcher, No OpenAI Lib
+L.I.N.N.Y. v9.4 - Loyal Intelligent Neural Network for You
+Hybrid Startup: Instant Lock (~0.3s), Optimized Loop, Instant Interrupt, Quick Wins Applied
 
 Architecture:
 - VoiceEngine: TTS only, manages is_speaking flag
@@ -32,8 +32,7 @@ from pathlib import Path
 import ctypes
 
 # GUI & System
-import customtkinter as ctk
-from PIL import Image, ImageDraw
+# customtkinter and PIL imported lazily in _setup_gui()
 import pystray
 import psutil
 
@@ -42,6 +41,7 @@ import speech_recognition as sr
 import edge_tts
 import pygame
 import pyautogui
+import keyboard  # Global hotkey support
 
 # AI Providers
 import groq
@@ -193,7 +193,7 @@ class BrainManager:
         if self.config.get("gemini_api_key"):
             try:
                 genai.configure(api_key=self.config["gemini_api_key"])
-                self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+                self.gemini_model = genai.GenerativeModel('gemini-2.0-flash-exp')
                 logger.info("✓ Gemini initialized")
             except Exception as e:
                 logger.warning(f"Gemini failed: {e}")
@@ -414,11 +414,22 @@ class VoiceEngine:
         self.voice = voice
         pygame.mixer.init()
         self.is_speaking = False
+        self._interrupt = False  # Interrupt flag for instant stop
+    
+    def stop(self):
+        """Instantly stop current TTS playback"""
+        self._interrupt = True
+        if pygame.mixer.music.get_busy():
+            pygame.mixer.music.stop()
+            pygame.mixer.music.unload()
+        self.is_speaking = False
+        logger.info("🛑 TTS interrupted")
     
     def speak(self, text, callback=None):
         """Speak text asynchronously"""
         def _thread():
             try:
+                self._interrupt = False  # Reset interrupt flag
                 self.is_speaking = True
                 logger.debug("🔒 TTS locked")
                 
@@ -432,8 +443,13 @@ class VoiceEngine:
                 pygame.mixer.music.play()
                 logger.debug("▶️ Playback started")
                 
-                while pygame.mixer.music.get_busy():
+                # Check for interrupt flag during playback
+                while pygame.mixer.music.get_busy() and not self._interrupt:
                     pygame.time.Clock().tick(10)
+                
+                if self._interrupt:
+                    pygame.mixer.music.stop()
+                    logger.debug("⏹️ Playback interrupted")
                 
                 pygame.mixer.music.unload()
                 os.unlink(temp_path)
@@ -468,6 +484,7 @@ class TrayManager:
     
     def _img(self, color):
         """Create colored circle"""
+        from PIL import Image, ImageDraw  # Lazy import
         img = Image.new('RGB', (64, 64), color='white')
         draw = ImageDraw.Draw(img)
         draw.ellipse([8, 8, 56, 56], fill=color)
@@ -484,7 +501,7 @@ class TrayManager:
     def start(self):
         """Start tray"""
         img = self._img('green')
-        self.icon = pystray.Icon("LINNY", img, "L.I.N.N.Y. v9.0", self._menu())
+        self.icon = pystray.Icon("LINNY", img, "L.I.N.N.Y. v9.3", self._menu())
         threading.Thread(target=self.icon.run, daemon=True).start()
         logger.info("✓ Tray started")
     
@@ -520,7 +537,6 @@ class LinnyAssistant:
         self.recognizer = sr.Recognizer()
         self.microphone = sr.Microphone()
         self._audio_source = None
-        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
     
     def _get_weather(self):
         """Fetch weather from Open-Meteo with contextual advice"""
@@ -905,7 +921,7 @@ class LinnyAssistant:
                     time.sleep(0.1)
                 
                 cycle += 1
-                if cycle % 100 == 0:
+                if cycle % 500 == 0:
                     gc.collect()
                     logger.debug(f"🧹 Cycle {cycle}")
                 
@@ -914,7 +930,7 @@ class LinnyAssistant:
                     try:
                         source = self.microphone.__enter__()
                         self._audio_source = source
-                        self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                        # No recalibration - using initial calibration from start_listening()
                     except Exception as e:
                         logger.error(f"Re-open failed: {e}")
                         time.sleep(1)
@@ -970,17 +986,37 @@ class LinnyAssistant:
                 continue
     
     def start_listening(self):
-        """Start listening"""
+        """Start listening with retry logic"""
         if not self.is_listening:
-            try:
-                self._audio_source = self.microphone.__enter__()
-                logger.info("✓ Audio source opened")
-                self.recognizer.adjust_for_ambient_noise(self._audio_source, duration=1)
-                self.recognizer.pause_threshold = 0.8
-                self.recognizer.dynamic_energy_threshold = False
-                logger.info("✓ Recognizer configured")
-            except Exception as e:
-                logger.warning(f"Audio setup warning: {e}")
+            max_retries = 3
+            retry_delay = 1
+            
+            for attempt in range(max_retries):
+                try:
+                    self._audio_source = self.microphone.__enter__()
+                    logger.info("✓ Audio source opened")
+                    
+                    # ONE-TIME CALIBRATION (not in loop!)
+                    self.recognizer.adjust_for_ambient_noise(self._audio_source, duration=1)
+                    
+                    # OPTIMIZED PARAMETERS for maximum responsiveness
+                    self.recognizer.pause_threshold = 0.6  # Faster end-of-speech detection
+                    self.recognizer.non_speaking_duration = 0.3  # Tighter silence detection
+                    self.recognizer.dynamic_energy_threshold = False  # Use initial calibration
+                    
+                    logger.info("✓ Recognizer configured (optimized for speed)")
+                    break  # Success!
+                except Exception as e:
+                    logger.warning(f"Audio setup failed (attempt {attempt+1}/{max_retries}): {e}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                    else:
+                        logger.error("❌ CRITICAL: Could not initialize microphone after 3 attempts!")
+                        try:
+                            self.voice.speak("Microphone initialization failed. Please check your audio devices.")
+                        except Exception:
+                            pass
+                        return  # Don't start listener if mic failed
             
             self.is_listening = True
             threading.Thread(target=self._listen_loop, daemon=True).start()
@@ -1035,6 +1071,13 @@ class LinnyApp:
         
         # Start tray
         self.tray.start()
+        
+        # GLOBAL HOTKEY: Ctrl+Shift+Del for instant mute/interrupt
+        try:
+            keyboard.add_hotkey('ctrl+shift+del', self._hotkey_interrupt)
+            logger.info("✓ Global hotkey registered: Ctrl+Shift+Del")
+        except Exception as e:
+            logger.warning(f"Could not register global hotkey: {e}")
         
         # High priority
         try:
@@ -1095,15 +1138,19 @@ class LinnyApp:
     
     def _setup_gui(self):
         """Setup GUI"""
+        # Lazy imports - only load GUI libraries when needed
+        import customtkinter as ctk
+        from PIL import Image, ImageDraw
+        
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
         
         self.root = ctk.CTk()
-        self.root.title("L.I.N.N.Y. v9.0 - Dashboard")
+        self.root.title("L.I.N.N.Y. v9.3 - Dashboard")
         self.root.geometry("800x700")
         
         # Header
-        header = ctk.CTkLabel(self.root, text="L.I.N.N.Y. v9.0", font=("Arial", 24, "bold"))
+        header = ctk.CTkLabel(self.root, text="L.I.N.N.Y. v9.3", font=("Arial", 24, "bold"))
         header.pack(pady=20)
         
         # Status
@@ -1236,78 +1283,121 @@ class LinnyApp:
         if hasattr(self, 'status_label'):
             self.status_label.configure(text="Status: Listening...")
     
+    def _hotkey_interrupt(self):
+        """Global hotkey handler: Instant interrupt + mute toggle"""
+        logger.info("⚡ HOTKEY: Ctrl+Shift+Del pressed")
+        
+        # 1. INSTANT INTERRUPT: Stop any ongoing TTS
+        self.voice.stop()
+        
+        # 2. TOGGLE MUTE
+        self._toggle_mute()
+    
     def startup_sequence(self):
         """
-        Robust startup sequence:
-        1. Wait for audio drivers
-        2. Get timezone and current time
-        3. Build greeting with date, time, and smart schedule
-        4. Speak greeting
-        5. Lock workstation
-        6. Start listening
+        OPTIMIZED HYBRID STARTUP SEQUENCE (v9.3):
+        1. Lock workstation IMMEDIATELY (~0.3s)
+        2. Set high process priority
+        3. Wait for audio drivers to initialize (2s)
+        4. Start listening (immortal loop)
+        5. Async: Fetch weather/calendar, speak greeting
+        
+        This ensures PC locks before user can interact, while maintaining
+        full smart assistant functionality (greeting plays after unlock).
         """
-        logger.info("🚀 Starting Linny startup sequence...")
+        logger.info("🚀 Starting Linny HYBRID startup sequence...")
         
         try:
-            # Step 1: Wait for Windows Audio drivers to initialize
-            logger.info("⏳ Waiting 2s for audio drivers...")
+            # ================================================================
+            # CRITICAL PATH: LOCK IMMEDIATELY (before any delays)
+            # ================================================================
+            logger.info("🔒 IMMEDIATE LOCK: Locking workstation...")
+            try:
+                ctypes.windll.user32.LockWorkStation()
+                logger.info("✓ Workstation locked in ~0.3s")
+            except Exception as e:
+                logger.error(f"Failed to lock workstation: {e}")
+            
+            # ================================================================
+            # HIGH PRIORITY: Ensure Linny loads before other startup apps
+            # ================================================================
+            try:
+                p = psutil.Process()
+                p.nice(psutil.HIGH_PRIORITY_CLASS)
+                logger.info("✓ Process priority set to HIGH")
+            except Exception as e:
+                logger.warning(f"Could not set high priority: {e}")
+            
+            # ================================================================
+            # CRITICAL: Wait for audio drivers BEFORE starting listener
+            # ================================================================
+            logger.info("⏳ Waiting 2s for Windows audio drivers...")
             time.sleep(2)
             
-            # Step 2: Get timezone and current time
-            tz = pytz.timezone(self.config.get("timezone", "Asia/Manila"))
-            now = datetime.now(tz)
-            
-            # Step 3: Build greeting
-            hour = now.hour
-            if 5 <= hour < 12:
-                greeting_prefix = "Good morning"
-            elif 12 <= hour < 18:
-                greeting_prefix = "Good afternoon"
-            else:
-                greeting_prefix = "Good evening"
-            
-            user_name = self.config.get("user_name", "User")
-            greeting = f"{greeting_prefix}, {user_name}."
-            
-            # Format date and time
-            date_str = now.strftime("%A, %B %d")
-            time_str = now.strftime("%I:%M %p")
-            datetime_msg = f"It is {date_str}, at {time_str}."
-            
-            # Get smart schedule
-            try:
-                schedule_msg = self.calendar.get_schedule("")
-            except Exception as e:
-                logger.warning(f"Could not fetch schedule: {e}")
-                schedule_msg = "Calendar is offline."
-            
-            # Get weather
-            try:
-                weather_msg = self.assistant._get_weather()
-            except Exception as e:
-                logger.warning(f"Could not fetch weather: {e}")
-                weather_msg = ""
-            
-            # Combine all messages
-            full_greeting = f"{greeting} {datetime_msg} {weather_msg} {schedule_msg}"
-            
-            logger.info(f"✨ Greeting: {full_greeting}")
-            
-            # Step 4: Speak greeting
-            self.voice.speak(full_greeting)
-            
-            # Step 5: Lock workstation
-            try:
-                logger.info("🔒 Locking workstation...")
-                ctypes.windll.user32.LockWorkStation()
-            except Exception as e:
-                logger.warning(f"Could not lock workstation: {e}")
-            
-            # Step 6: Start listening immediately
+            # ================================================================
+            # START LISTENING: Immortal loop starts (audio is now ready)
+            # ================================================================
             logger.info("🎤 Starting listener...")
             self._start_listening()
             
-            logger.info("✓ Startup sequence complete")
+            # ================================================================
+            # ASYNC GREETING: Everything else happens in background
+            # ================================================================
+            def _async_greeting():
+                """Background thread: fetch data + greeting"""
+                try:
+                    
+                    # Get timezone and current time
+                    tz = pytz.timezone(self.config.get("timezone", "Asia/Manila"))
+                    now = datetime.now(tz)
+                    
+                    # Build greeting
+                    hour = now.hour
+                    if 5 <= hour < 12:
+                        greeting_prefix = "Good morning"
+                    elif 12 <= hour < 18:
+                        greeting_prefix = "Good afternoon"
+                    else:
+                        greeting_prefix = "Good evening"
+                    
+                    user_name = self.config.get("user_name", "User")
+                    greeting = f"{greeting_prefix}, {user_name}."
+                    
+                    # Format date and time
+                    date_str = now.strftime("%A, %B %d")
+                    time_str = now.strftime("%I:%M %p")
+                    datetime_msg = f"It is {date_str}, at {time_str}."
+                    
+                    # Get smart schedule (async network call)
+                    try:
+                        schedule_msg = self.calendar.get_schedule("")
+                    except Exception as e:
+                        logger.warning(f"Could not fetch schedule: {e}")
+                        schedule_msg = "Calendar is offline."
+                    
+                    # Get weather (async network call)
+                    try:
+                        weather_msg = self.assistant._get_weather()
+                    except Exception as e:
+                        logger.warning(f"Could not fetch weather: {e}")
+                        weather_msg = ""
+                    
+                    # Combine all messages
+                    full_greeting = f"{greeting} {datetime_msg} {weather_msg} {schedule_msg}"
+                    
+                    logger.info(f"✨ [ASYNC] Greeting ready: {full_greeting}")
+                    
+                    # Speak greeting (user will hear this after unlocking)
+                    self.voice.speak(full_greeting)
+                    
+                except Exception as e:
+                    logger.error(f"Async greeting error: {e}")
+            
+            # Launch async greeting thread
+            threading.Thread(target=_async_greeting, daemon=True).start()
+            logger.info("✓ Async greeting thread launched")
+            
+            logger.info("✓ HYBRID startup sequence complete (lock: ~0.3s)")
             
         except Exception as e:
             logger.error(f"Startup sequence error: {e}")
