@@ -221,10 +221,77 @@ class LightManager:
             if "auth" in str(e).lower() or "credentials" in str(e).lower():
                 logger.error("❌ Tapo Authentication Failed during turn off.")
 
-    
-# ============================================================================
-# BRAIN MANAGER - Cascading AI (No OpenAI Library)
-# ============================================================================
+    def set_brightness(self, level):
+        """Set specific brightness level (0-100)"""
+        if not self.bulb or not self.loop:
+            logger.warning("Smart bulb not available")
+            return False
+        
+        try:
+            # Get light module
+            light = None
+            if Module and Module.Light in self.bulb.modules:
+                light = self.bulb.modules[Module.Light]
+            elif 'Light' in self.bulb.modules:
+                light = self.bulb.modules['Light']
+            else:
+                return False
+            
+            # Clamp level
+            level = max(0, min(100, int(level)))
+            
+            logger.info(f"💡 Setting brightness to {level}%")
+            self.loop.run_until_complete(light.set_brightness(level))
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to set brightness: {e}")
+            return False
+
+    def set_color(self, color_name):
+        """Set bulb color by name"""
+        if not self.bulb or not self.loop:
+            logger.warning("Smart bulb not available")
+            return False
+        
+        try:
+            # Get light module
+            light = None
+            if Module and Module.Light in self.bulb.modules:
+                light = self.bulb.modules[Module.Light]
+            elif 'Light' in self.bulb.modules:
+                light = self.bulb.modules['Light']
+            else:
+                return False
+            
+            color_map = {
+                "red": (0, 100, 100),
+                "blue": (240, 100, 100),
+                "violet": (270, 100, 100),
+                "green": (120, 100, 100),
+                "warm": None  # Special case for temp
+            }
+            
+            target = color_name.lower()
+            if target not in color_map:
+                return False
+            
+            logger.info(f"🎨 Setting color to {target}")
+            
+            if target == "warm":
+                # Warm White (2700K)
+                self.loop.run_until_complete(light.set_color_temp(2700))
+            else:
+                # HSV Colors
+                h, s, v = color_map[target]
+                self.loop.run_until_complete(light.set_hsv(h, s, v))
+                
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to set color: {e}")
+            return False
+            
 class BrainManager:
     """Cascading AI: Groq -> Gemini -> Perplexity (via requests)"""
     
@@ -831,6 +898,29 @@ class LinnyAssistant:
         # PRIORITY 3: SMART LIGHT CONTROLS
         # ====================================================================
         
+        # Specific Brightness Control (e.g. "Lights to 50%", "Set lights to 20%", "Set brightness to 50%")
+        if ("lights" in text_lower or "brightness" in text_lower) and ("%" in text_lower or "percent" in text_lower or "to" in text_lower):
+            match = re.search(r'(\d+)', text_lower)
+            if match:
+                level = int(match.group(1))
+                logger.info(f"💡 Lights: Set to {level}%")
+                if self.lights.set_brightness(level):
+                    self.voice.speak(f"Lights set to {level} percent.")
+                else:
+                    self.voice.speak("I couldn't set the brightness.")
+                return
+
+        # Color Control
+        if "color" in text_lower and "lights" in text_lower:
+            for color in ["red", "blue", "violet", "green", "warm"]:
+                if color in text_lower:
+                    logger.info(f"🎨 Lights: Color {color}")
+                    if self.lights.set_color(color):
+                        self.voice.speak(f"Lights changed to {color}.")
+                    else:
+                        self.voice.speak(f"I couldn't change the color to {color}.")
+                    return
+        
         if any(w in text_lower for w in ["turn on lights", "lights on", "turn on the lights", "turn on bulb", "bulb on", "turn on the bulb", "buksan ilaw", "buksan ang ilaw"]):
             logger.info("💡 Lights: On")
             self.lights.turn_on()
@@ -860,13 +950,13 @@ class LinnyAssistant:
             self.lights.set_mode("gaming")
             self.voice.speak("Gaming mode activated.")
             return
-        
+             
         # ====================================================================
         # PRIORITY 4: APP LAUNCHER
         # ====================================================================
         
         app_name = None
-        for verb in ["open", "launch", "start"]:
+        for verb in ["open", "launch", "start", "Accio"]:
             if verb in text_lower:
                 parts = text_lower.split(verb, 1)
                 if len(parts) > 1:
