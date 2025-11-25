@@ -1,5 +1,17 @@
 """
 L.I.N.N.Y. v9.4 - Loyal Intelligent Neural Network for You
+Hybrid Startup: Instant Lock (~0.3s), Optimized Loop, Instant Interrupt, Quick Wins Applied
+Patch v9.4: Fixed dashboard crash, added Tapo authentication, updated app name display
+
+Architecture:
+- VoiceEngine: TTS only, manages is_speaking flag
+- LightManager: Tapo L530E smart bulb control with email/password auth (kasa)
+- BrainManager: Groq + Gemini + Perplexity (via requests, no openai lib)
+- CalendarManager: Google Calendar with date intent detection
+- LinnyAssistant: Core logic, listening, command execution
+- LinnyApp: GUI + Tray only, delegates to LinnyAssistant
+- Immortal listener: Daemon thread, never breaks, fire-and-forget execution
+- Hardcoded-first: 10+ priority levels before AI fallback
 """
 
 import os
@@ -221,12 +233,42 @@ class LightManager:
             if "auth" in str(e).lower() or "credentials" in str(e).lower():
                 logger.error("❌ Tapo Authentication Failed during turn off.")
 
-    
 # ============================================================================
 # BRAIN MANAGER - Cascading AI (No OpenAI Library)
 # ============================================================================
 class BrainManager:
-    """Cascading AI: Groq -> Gemini -> Perplexity (via requests)"""
+            if "auth" in str(e).lower() or "credentials" in str(e).lower():
+                logger.error("❌ Tapo Authentication Failed during mode change.")
+    
+    def turn_on(self):
+        """Turn on bulb"""
+        if not self.bulb or not self.loop:
+            return
+        try:
+            self.loop.run_until_complete(self.bulb.turn_on())
+            logger.info("💡 Bulb turned on")
+        except Exception as e:
+            logger.error(f"Failed to turn on bulb: {e}")
+            if "auth" in str(e).lower() or "credentials" in str(e).lower():
+                logger.error("❌ Tapo Authentication Failed during turn on.")
+    
+    def turn_off(self):
+        """Turn off bulb"""
+        if not self.bulb or not self.loop:
+            return
+        try:
+            self.loop.run_until_complete(self.bulb.turn_off())
+            logger.info("🔦 Bulb turned off")
+        except Exception as e:
+            logger.error(f"Failed to turn off bulb: {e}")
+            if "auth" in str(e).lower() or "credentials" in str(e).lower():
+                logger.error("❌ Tapo Authentication Failed during turn off.")
+
+# ============================================================================
+# BRAIN MANAGER - Cascading AI (No OpenAI Library)
+# ============================================================================
+class BrainManager:
+        """Cascading AI: Groq -> Gemini -> Perplexity (via requests)"""
     
     def __init__(self, config):
         self.config = config
@@ -761,8 +803,6 @@ class LinnyAssistant:
         
         if any(w in text_lower for w in ["shutdown", "shut down"]):
             logger.info("⚡ System: Shutdown")
-            logger.info("💡 Lights: Off")
-            self.lights.turn_off()
             self.voice.speak("Shutting down the System.")
             threading.Timer(3.0, lambda: os.system("shutdown /s /t 0")).start()
             return
@@ -831,13 +871,13 @@ class LinnyAssistant:
         # PRIORITY 3: SMART LIGHT CONTROLS
         # ====================================================================
         
-        if any(w in text_lower for w in ["turn on lights", "lights on", "turn on the lights", "turn on bulb", "bulb on", "turn on the bulb", "buksan ilaw", "buksan ang ilaw"]):
+        if any(w in text_lower for w in ["turn on lights", "lights on", "turn on the lights", "buksan ilaw", "buksan ang ilaw"]):
             logger.info("💡 Lights: On")
             self.lights.turn_on()
             self.voice.speak("Lights turned on.")
             return
         
-        if any(w in text_lower for w in ["turn off lights", "lights off", "turn off the lights", "turn off bulb", "bulb off", "turn off the bulb", "patayin ilaw", "patayin ang ilaw", "patay ilaw"]):
+        if any(w in text_lower for w in ["turn off lights", "lights off", "turn off the lights", "patayin ilaw", "patayin ang ilaw", "patay ilaw"]):
             logger.info("💡 Lights: Off")
             self.lights.turn_off()
             self.voice.speak("Lights turned off.")
