@@ -11,10 +11,8 @@ import tempfile
 import logging
 import subprocess
 import webbrowser
-import gc
 import time
 import requests
-import concurrent.futures
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -104,6 +102,27 @@ class LightManager:
         self.loop = None  # Store event loop for reuse
         self._connect()
     
+    def _ensure_connected(self):
+        """Check if bulb is connected, return True if connected"""
+        if not self.bulb or not self.loop:
+            logger.warning("Smart bulb not available")
+            return False
+        return True
+    
+    def _get_light_module(self):
+        """Get light module from bulb, returns None if not available"""
+        if Module and Module.Light in self.bulb.modules:
+            return self.bulb.modules[Module.Light]
+        elif 'Light' in self.bulb.modules:
+            return self.bulb.modules['Light']
+        else:
+            logger.error(f"Light module not found. Available: {list(self.bulb.modules.keys())}")
+            return None
+    
+    def _log_auth_error(self):
+        """Log authentication error message"""
+        logger.error("❌ Tapo Authentication Failed. Please check your email and password in settings.")
+    
     def _connect(self):
         """Connect to smart bulb with authentication"""
         if Device is None:
@@ -138,14 +157,13 @@ class LightManager:
         except Exception as e:
             logger.warning(f"Smart bulb connection failed: {e}")
             if "auth" in str(e).lower() or "credentials" in str(e).lower():
-                logger.error("❌ Tapo Authentication Failed. Please check your email and password in settings.")
+                self._log_auth_error()
             self.bulb = None
             self.loop = None
     
     def set_mode(self, mode):
         """Set bulb mode: Focus, Movie, Gaming"""
-        if not self.bulb or not self.loop:
-            logger.warning("Smart bulb not available")
+        if not self._ensure_connected():
             return
         
         try:
@@ -153,17 +171,8 @@ class LightManager:
             logger.info(f"Available modules: {list(self.bulb.modules.keys())}")
             
             # Access light module for bulb control
-            light = None
-            if Module and Module.Light in self.bulb.modules:
-                light = self.bulb.modules[Module.Light]
-                logger.info("Using Module.Light")
-
-            elif 'Light' in self.bulb.modules:
-                light = self.bulb.modules['Light']
-                logger.info("Using string 'Light'")
-
-            else:
-                logger.error(f"Light module not found. Available: {list(self.bulb.modules.keys())}")
+            light = self._get_light_module()
+            if not light:
                 return
             
             # Reuse the same event loop from connection
@@ -195,11 +204,11 @@ class LightManager:
         except Exception as e:
             logger.error(f"Failed to set mode: {e}", exc_info=True)
             if "auth" in str(e).lower() or "credentials" in str(e).lower():
-                logger.error("❌ Tapo Authentication Failed during mode change.")
+                self._log_auth_error()
     
     def turn_on(self):
         """Turn on bulb"""
-        if not self.bulb or not self.loop:
+        if not self._ensure_connected():
             return
         try:
             self.loop.run_until_complete(self.bulb.turn_on())
@@ -207,11 +216,11 @@ class LightManager:
         except Exception as e:
             logger.error(f"Failed to turn on bulb: {e}")
             if "auth" in str(e).lower() or "credentials" in str(e).lower():
-                logger.error("❌ Tapo Authentication Failed during turn on.")
+                self._log_auth_error()
     
     def turn_off(self):
         """Turn off bulb"""
-        if not self.bulb or not self.loop:
+        if not self._ensure_connected():
             return
         try:
             self.loop.run_until_complete(self.bulb.turn_off())
@@ -219,22 +228,17 @@ class LightManager:
         except Exception as e:
             logger.error(f"Failed to turn off bulb: {e}")
             if "auth" in str(e).lower() or "credentials" in str(e).lower():
-                logger.error("❌ Tapo Authentication Failed during turn off.")
+                self._log_auth_error()
 
     def set_brightness(self, level):
         """Set specific brightness level (0-100)"""
-        if not self.bulb or not self.loop:
-            logger.warning("Smart bulb not available")
+        if not self._ensure_connected():
             return False
         
         try:
             # Get light module
-            light = None
-            if Module and Module.Light in self.bulb.modules:
-                light = self.bulb.modules[Module.Light]
-            elif 'Light' in self.bulb.modules:
-                light = self.bulb.modules['Light']
-            else:
+            light = self._get_light_module()
+            if not light:
                 return False
             
             # Clamp level
@@ -250,18 +254,13 @@ class LightManager:
 
     def set_color(self, color_name):
         """Set bulb color by name"""
-        if not self.bulb or not self.loop:
-            logger.warning("Smart bulb not available")
+        if not self._ensure_connected():
             return False
         
         try:
             # Get light module
-            light = None
-            if Module and Module.Light in self.bulb.modules:
-                light = self.bulb.modules[Module.Light]
-            elif 'Light' in self.bulb.modules:
-                light = self.bulb.modules['Light']
-            else:
+            light = self._get_light_module()
+            if not light:
                 return False
             
             color_map = {
@@ -446,6 +445,12 @@ class CalendarManager:
         except Exception as e:
             logger.warning(f"Could not find School calendar: {e}")
     
+    def _ensure_timezone_aware(self, dt):
+        """Ensure datetime is timezone-aware"""
+        if dt.tzinfo is None:
+            return self.timezone.localize(dt)
+        return dt
+    
     def get_schedule(self, query=""):
         """Get schedule with smart intent detection"""
         if not self.service:
@@ -488,10 +493,8 @@ class CalendarManager:
                 start_t = date_parser.parse(start_str)
                 end_t = date_parser.parse(end_str)
                 
-                if start_t.tzinfo is None:
-                    start_t = self.timezone.localize(start_t)
-                if end_t.tzinfo is None:
-                    end_t = self.timezone.localize(end_t)
+                start_t = self._ensure_timezone_aware(start_t)
+                end_t = self._ensure_timezone_aware(end_t)
                 
                 if label == "today" and end_t < now:
                     continue
@@ -661,7 +664,8 @@ class LinnyAssistant:
     def _get_weather(self):
         """Fetch weather from Open-Meteo with contextual advice"""
         try:
-            url = "https://api.open-meteo.com/v1/forecast?latitude=14.2800&longitude=120.9969&current_weather=true&timezone=Asia%2FManila"
+            # Coordinates for Anahaw 2, Bulihan, Silang, Cavite, Philippines
+            url = "https://api.open-meteo.com/v1/forecast?latitude=14.2167&longitude=120.9833&current_weather=true&timezone=Asia%2FManila"
             resp = requests.get(url, timeout=10)
             resp.raise_for_status()
             data = resp.json()
@@ -831,6 +835,7 @@ class LinnyAssistant:
             logger.info("💡 Lights: Off")
             self.lights.turn_off()
             self.voice.speak("Shutting down the System.")
+            time.sleep(3)
             threading.Timer(3.0, lambda: os.system("shutdown /s /t 0")).start()
             return
         
@@ -1635,6 +1640,20 @@ class LinnyApp:
 # ============================================================================
 def main():
     """Main entry point - runs startup sequence then app"""
+    # Set process name for Task Manager
+    try:
+        # Set console title
+        ctypes.windll.kernel32.SetConsoleTitleW("Linny")
+        # Set process name for Task Manager display
+        try:
+            import setproctitle
+            setproctitle.setproctitle("Linny")
+            logger.info("✓ Process name set to 'Linny'")
+        except ImportError:
+            logger.info("setproctitle not installed, Task Manager will show 'python'")
+    except Exception as e:
+        logger.warning(f"Could not set process title: {e}")
+    
     headless = "--startup" in sys.argv
     app = LinnyApp(headless=headless)
     
