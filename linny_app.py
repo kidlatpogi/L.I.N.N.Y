@@ -17,6 +17,7 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 import ctypes
+import gc
 
 # GUI & System
 # customtkinter and PIL imported lazily in _setup_gui()
