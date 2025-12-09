@@ -538,38 +538,23 @@ class CalendarManager:
 # VOICE ENGINE - TTS Only
 # ============================================================================
 class VoiceEngine:
-    """Handles TTS with pyttsx3 (David/Zira) or Edge TTS fallback"""
+    """Handles TTS with Edge TTS (en-PH-RosaNeural) or pyttsx3 fallback"""
     
-    def __init__(self, voice="David"):
-        # Support pyttsx3 voices (David, Zira) or Edge TTS voices
+    def __init__(self, voice="en-PH-RosaNeural"):
+        # Prefer Edge TTS for natural Filipino voice, fallback to pyttsx3 if needed
         self.voice = voice
-        self.use_edge_tts = voice not in ["David", "Zira"]
+        self.use_edge_tts = voice == "en-PH-RosaNeural"
         pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
         self.is_speaking = False
         self._interrupt = False  # Interrupt flag for instant stop
         
-        # Initialize pyttsx3
+        # Initialize pyttsx3 as fallback
         try:
             import pyttsx3
             self.pyttsx3_engine = pyttsx3.init()
-            self.pyttsx3_engine.setProperty('rate', 175)  # Speed
+            self.pyttsx3_engine.setProperty('rate', 150)  # Speed (slower for better clarity)
             self.pyttsx3_engine.setProperty('volume', 1.0)  # Volume
-            
-            # Set pyttsx3 voice if available
-            if not self.use_edge_tts:
-                voices = self.pyttsx3_engine.getProperty('voices')
-                voice_found = False
-                for v in voices:
-                    if voice.lower() in v.name.lower():
-                        self.pyttsx3_engine.setProperty('voice', v.id)
-                        logger.info(f"✓ Using voice: {v.name}")
-                        voice_found = True
-                        break
-                if not voice_found and voices:
-                    # Fallback to first available voice
-                    self.pyttsx3_engine.setProperty('voice', voices[0].id)
-                    logger.info(f"✓ Voice '{voice}' not found. Using: {voices[0].name}")
-            logger.info("✓ pyttsx3 initialized")
+            logger.info("✓ pyttsx3 initialized (fallback)")
         except Exception as e:
             logger.warning(f"pyttsx3 init failed: {e}")
             self.pyttsx3_engine = None
@@ -584,29 +569,21 @@ class VoiceEngine:
         logger.info("🛑 TTS interrupted")
     
     def speak(self, text, callback=None):
-        """Speak text asynchronously with pyttsx3 or Edge TTS"""
+        """Speak text asynchronously with Edge TTS (en-PH-RosaNeural) or pyttsx3 fallback"""
         def _thread():
             try:
                 self._interrupt = False  # Reset interrupt flag
                 self.is_speaking = True
                 logger.debug("🔒 TTS locked")
                 
-                # Use pyttsx3 for Jarvis/David/Zira/Mark, Edge TTS for others
-                if not self.use_edge_tts and self.pyttsx3_engine:
-                    try:
-                        logger.debug(f"▶️ Using pyttsx3 ({self.voice})")
-                        self.pyttsx3_engine.say(text)
-                        self.pyttsx3_engine.runAndWait()
-                        logger.debug("⏹️ pyttsx3 playback finished")
-                    except Exception as e:
-                        logger.error(f"pyttsx3 error: {e}")
-                else:
-                    # Try Edge TTS
+                # Try Edge TTS first (natural Filipino voice)
+                if self.use_edge_tts:
                     try:
                         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
                         temp_path = temp_file.name
                         temp_file.close()
                         
+                        logger.debug(f"▶️ Attempting Edge TTS ({self.voice})...")
                         asyncio.run(edge_tts.Communicate(text, self.voice).save(temp_path))
                         
                         pygame.mixer.music.load(temp_path)
@@ -626,19 +603,29 @@ class VoiceEngine:
                         logger.debug("⏹️ Edge TTS playback finished")
                     
                     except Exception as edge_error:
-                        logger.warning(f"Edge TTS failed: {edge_error}, switching to pyttsx3")
+                        logger.warning(f"Edge TTS failed ({edge_error}), fallback to pyttsx3...")
                         
-                        # Fallback to pyttsx3
+                        # Fallback to pyttsx3 when Edge TTS fails
                         if self.pyttsx3_engine and not self._interrupt:
                             try:
-                                logger.info("🔄 Using pyttsx3 fallback")
+                                logger.info("🔄 Using pyttsx3 fallback (Zira voice)")
                                 self.pyttsx3_engine.say(text)
                                 self.pyttsx3_engine.runAndWait()
                                 logger.debug("⏹️ pyttsx3 playback finished")
                             except Exception as pyttsx3_error:
                                 logger.error(f"pyttsx3 fallback also failed: {pyttsx3_error}")
                         else:
-                            raise edge_error  # Re-raise if no fallback available
+                            raise edge_error
+                else:
+                    # Direct pyttsx3 (for alternative voices)
+                    if self.pyttsx3_engine:
+                        try:
+                            logger.debug(f"▶️ Using pyttsx3 ({self.voice})")
+                            self.pyttsx3_engine.say(text)
+                            self.pyttsx3_engine.runAndWait()
+                            logger.debug("⏹️ pyttsx3 playback finished")
+                        except Exception as e:
+                            logger.error(f"pyttsx3 error: {e}")
                 
             except Exception as e:
                 logger.error(f"TTS error: {e}")
