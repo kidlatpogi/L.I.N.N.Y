@@ -30,6 +30,7 @@ import edge_tts
 import pygame
 import pyautogui
 import keyboard  # Global hotkey support
+import pyttsx3  # Fallback TTS
 
 # AI Providers
 import groq
@@ -74,6 +75,11 @@ logging.getLogger('googleapiclient.discovery').setLevel(logging.ERROR)
 logging.getLogger('urllib3').setLevel(logging.ERROR)
 logging.getLogger('PIL').setLevel(logging.ERROR)
 logging.getLogger('kasa').setLevel(logging.WARNING)
+logging.getLogger('comtypes').setLevel(logging.ERROR)
+logging.getLogger('comtypes.client').setLevel(logging.ERROR)
+logging.getLogger('comtypes._comobject').setLevel(logging.ERROR)
+logging.getLogger('comtypes._vtbl').setLevel(logging.ERROR)
+logging.getLogger('comtypes._post_coinit').setLevel(logging.ERROR)
 
 # ============================================================================
 # CONSTANTS & DEFAULT CONFIG
@@ -532,13 +538,41 @@ class CalendarManager:
 # VOICE ENGINE - TTS Only
 # ============================================================================
 class VoiceEngine:
-    """Handles TTS with Edge TTS + Pygame playback"""
+    """Handles TTS with pyttsx3 (David/Zira) or Edge TTS fallback"""
     
-    def __init__(self, voice="en-PH-RosaNeural"):
+    def __init__(self, voice="David"):
+        # Support pyttsx3 voices (David, Zira) or Edge TTS voices
         self.voice = voice
-        pygame.mixer.init()
+        self.use_edge_tts = voice not in ["David", "Zira"]
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
         self.is_speaking = False
         self._interrupt = False  # Interrupt flag for instant stop
+        
+        # Initialize pyttsx3
+        try:
+            import pyttsx3
+            self.pyttsx3_engine = pyttsx3.init()
+            self.pyttsx3_engine.setProperty('rate', 175)  # Speed
+            self.pyttsx3_engine.setProperty('volume', 1.0)  # Volume
+            
+            # Set pyttsx3 voice if available
+            if not self.use_edge_tts:
+                voices = self.pyttsx3_engine.getProperty('voices')
+                voice_found = False
+                for v in voices:
+                    if voice.lower() in v.name.lower():
+                        self.pyttsx3_engine.setProperty('voice', v.id)
+                        logger.info(f"✓ Using voice: {v.name}")
+                        voice_found = True
+                        break
+                if not voice_found and voices:
+                    # Fallback to first available voice
+                    self.pyttsx3_engine.setProperty('voice', voices[0].id)
+                    logger.info(f"✓ Voice '{voice}' not found. Using: {voices[0].name}")
+            logger.info("✓ pyttsx3 initialized")
+        except Exception as e:
+            logger.warning(f"pyttsx3 init failed: {e}")
+            self.pyttsx3_engine = None
     
     def stop(self):
         """Instantly stop current TTS playback"""
@@ -550,34 +584,61 @@ class VoiceEngine:
         logger.info("🛑 TTS interrupted")
     
     def speak(self, text, callback=None):
-        """Speak text asynchronously"""
+        """Speak text asynchronously with pyttsx3 or Edge TTS"""
         def _thread():
             try:
                 self._interrupt = False  # Reset interrupt flag
                 self.is_speaking = True
                 logger.debug("🔒 TTS locked")
                 
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-                temp_path = temp_file.name
-                temp_file.close()
-                
-                asyncio.run(edge_tts.Communicate(text, self.voice).save(temp_path))
-                
-                pygame.mixer.music.load(temp_path)
-                pygame.mixer.music.play()
-                logger.debug("▶️ Playback started")
-                
-                # Check for interrupt flag during playback
-                while pygame.mixer.music.get_busy() and not self._interrupt:
-                    pygame.time.Clock().tick(10)
-                
-                if self._interrupt:
-                    pygame.mixer.music.stop()
-                    logger.debug("⏹️ Playback interrupted")
-                
-                pygame.mixer.music.unload()
-                os.unlink(temp_path)
-                logger.debug("⏹️ Playback finished")
+                # Use pyttsx3 for Jarvis/David/Zira/Mark, Edge TTS for others
+                if not self.use_edge_tts and self.pyttsx3_engine:
+                    try:
+                        logger.debug(f"▶️ Using pyttsx3 ({self.voice})")
+                        self.pyttsx3_engine.say(text)
+                        self.pyttsx3_engine.runAndWait()
+                        logger.debug("⏹️ pyttsx3 playback finished")
+                    except Exception as e:
+                        logger.error(f"pyttsx3 error: {e}")
+                else:
+                    # Try Edge TTS
+                    try:
+                        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+                        temp_path = temp_file.name
+                        temp_file.close()
+                        
+                        asyncio.run(edge_tts.Communicate(text, self.voice).save(temp_path))
+                        
+                        pygame.mixer.music.load(temp_path)
+                        pygame.mixer.music.play()
+                        logger.debug("▶️ Edge TTS playback started")
+                        
+                        # Check for interrupt flag during playback
+                        while pygame.mixer.music.get_busy() and not self._interrupt:
+                            pygame.time.Clock().tick(10)
+                        
+                        if self._interrupt:
+                            pygame.mixer.music.stop()
+                            logger.debug("⏹️ Playback interrupted")
+                        
+                        pygame.mixer.music.unload()
+                        os.unlink(temp_path)
+                        logger.debug("⏹️ Edge TTS playback finished")
+                    
+                    except Exception as edge_error:
+                        logger.warning(f"Edge TTS failed: {edge_error}, switching to pyttsx3")
+                        
+                        # Fallback to pyttsx3
+                        if self.pyttsx3_engine and not self._interrupt:
+                            try:
+                                logger.info("🔄 Using pyttsx3 fallback")
+                                self.pyttsx3_engine.say(text)
+                                self.pyttsx3_engine.runAndWait()
+                                logger.debug("⏹️ pyttsx3 playback finished")
+                            except Exception as pyttsx3_error:
+                                logger.error(f"pyttsx3 fallback also failed: {pyttsx3_error}")
+                        else:
+                            raise edge_error  # Re-raise if no fallback available
                 
             except Exception as e:
                 logger.error(f"TTS error: {e}")
