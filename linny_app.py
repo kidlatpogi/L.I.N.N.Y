@@ -30,7 +30,6 @@ import edge_tts
 import pygame
 import pyautogui
 import keyboard  # Global hotkey support
-import pyttsx3  # Fallback TTS
 
 # AI Providers
 import groq
@@ -75,11 +74,6 @@ logging.getLogger('googleapiclient.discovery').setLevel(logging.ERROR)
 logging.getLogger('urllib3').setLevel(logging.ERROR)
 logging.getLogger('PIL').setLevel(logging.ERROR)
 logging.getLogger('kasa').setLevel(logging.WARNING)
-logging.getLogger('comtypes').setLevel(logging.ERROR)
-logging.getLogger('comtypes.client').setLevel(logging.ERROR)
-logging.getLogger('comtypes._comobject').setLevel(logging.ERROR)
-logging.getLogger('comtypes._vtbl').setLevel(logging.ERROR)
-logging.getLogger('comtypes._post_coinit').setLevel(logging.ERROR)
 
 # ============================================================================
 # CONSTANTS & DEFAULT CONFIG
@@ -538,39 +532,13 @@ class CalendarManager:
 # VOICE ENGINE - TTS Only
 # ============================================================================
 class VoiceEngine:
-    """Handles TTS with Zira (natural female voice from pyttsx3)"""
+    """Handles TTS with Edge TTS + Pygame playback"""
     
-    def __init__(self, voice="Zira"):
-        # Use Zira - the natural-sounding female voice available on Windows
-        # Edge TTS currently unavailable (API connectivity issues)
+    def __init__(self, voice="en-PH-RosaNeural"):
         self.voice = voice
-        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+        pygame.mixer.init()
         self.is_speaking = False
         self._interrupt = False  # Interrupt flag for instant stop
-        
-        # Initialize pyttsx3 with optimized Zira settings
-        try:
-            import pyttsx3
-            self.pyttsx3_engine = pyttsx3.init()
-            
-            # Set Zira voice (natural-sounding female)
-            voices = self.pyttsx3_engine.getProperty('voices')
-            zira_voice = None
-            for voice_obj in voices:
-                if 'Zira' in voice_obj.name:
-                    zira_voice = voice_obj.id
-                    break
-            if zira_voice:
-                self.pyttsx3_engine.setProperty('voice', zira_voice)
-            
-            # Optimize voice settings to reduce robotic effect
-            self.pyttsx3_engine.setProperty('rate', 140)      # Slower speech (140 wpm, default is ~200)
-            self.pyttsx3_engine.setProperty('volume', 1.0)    # Max volume for clarity
-            
-            logger.info("✓ pyttsx3 initialized with Zira voice (natural female)")
-        except Exception as e:
-            logger.warning(f"pyttsx3 init failed: {e}")
-            self.pyttsx3_engine = None
     
     def stop(self):
         """Instantly stop current TTS playback"""
@@ -582,23 +550,34 @@ class VoiceEngine:
         logger.info("🛑 TTS interrupted")
     
     def speak(self, text, callback=None):
-        """Speak text asynchronously with Zira (natural female voice)"""
+        """Speak text asynchronously"""
         def _thread():
             try:
                 self._interrupt = False  # Reset interrupt flag
                 self.is_speaking = True
                 logger.debug("🔒 TTS locked")
                 
-                if self.pyttsx3_engine and not self._interrupt:
-                    try:
-                        logger.debug(f"▶️ Speaking with Zira voice...")
-                        self.pyttsx3_engine.say(text)
-                        self.pyttsx3_engine.runAndWait()
-                        logger.debug("⏹️ Zira playback finished")
-                    except Exception as pyttsx3_error:
-                        logger.error(f"Zira TTS failed: {pyttsx3_error}")
-                else:
-                    logger.error("pyttsx3 engine not initialized")
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+                temp_path = temp_file.name
+                temp_file.close()
+                
+                asyncio.run(edge_tts.Communicate(text, self.voice).save(temp_path))
+                
+                pygame.mixer.music.load(temp_path)
+                pygame.mixer.music.play()
+                logger.debug("▶️ Playback started")
+                
+                # Check for interrupt flag during playback
+                while pygame.mixer.music.get_busy() and not self._interrupt:
+                    pygame.time.Clock().tick(10)
+                
+                if self._interrupt:
+                    pygame.mixer.music.stop()
+                    logger.debug("⏹️ Playback interrupted")
+                
+                pygame.mixer.music.unload()
+                os.unlink(temp_path)
+                logger.debug("⏹️ Playback finished")
                 
             except Exception as e:
                 logger.error(f"TTS error: {e}")
