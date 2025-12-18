@@ -6,14 +6,13 @@ import os
 import sys
 import json
 import threading
-import asyncio
-import tempfile
 import logging
 import subprocess
 import webbrowser
 import time
 import requests
 import re
+import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 import ctypes
@@ -26,8 +25,7 @@ import psutil
 
 # Voice & Audio
 import speech_recognition as sr
-import edge_tts
-import pygame
+import pyttsx3
 import pyautogui
 import keyboard  # Global hotkey support
 
@@ -62,7 +60,7 @@ import pywhatkit
 # LOGGING
 # ============================================================================
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("LINNY")
@@ -74,6 +72,11 @@ logging.getLogger('googleapiclient.discovery').setLevel(logging.ERROR)
 logging.getLogger('urllib3').setLevel(logging.ERROR)
 logging.getLogger('PIL').setLevel(logging.ERROR)
 logging.getLogger('kasa').setLevel(logging.WARNING)
+logging.getLogger('comtypes').setLevel(logging.WARNING)
+logging.getLogger('comtypes._comobject').setLevel(logging.WARNING)
+logging.getLogger('comtypes._vtbl').setLevel(logging.WARNING)
+logging.getLogger('comtypes.client').setLevel(logging.WARNING)
+logging.getLogger('comtypes._post_coinit').setLevel(logging.WARNING)
 
 # ============================================================================
 # CONSTANTS & DEFAULT CONFIG
@@ -532,60 +535,82 @@ class CalendarManager:
 # VOICE ENGINE - TTS Only
 # ============================================================================
 class VoiceEngine:
-    """Handles TTS with Edge TTS + Pygame playback"""
+    """Offline TTS Engine using pyttsx3 - Zero Latency, No Network Dependencies"""
     
-    def __init__(self, voice="en-PH-RosaNeural"):
-        self.voice = voice
-        pygame.mixer.init()
+    def __init__(self, voice=None):
+        """
+        Initialize pyttsx3 engine with optimal settings for Linny.
+        
+        Args:
+            voice: Optional voice ID. If None, selects first female voice.
+        """
+        self.engine = pyttsx3.init()
         self.is_speaking = False
-        self._interrupt = False  # Interrupt flag for instant stop
+        self._interrupt = False
+        
+        # Get available voices
+        available_voices = self.engine.getProperty('voices')
+        
+        # Select voice: prioritize female voices
+        selected_voice = None
+        if voice:
+            # Use specified voice ID
+            selected_voice = voice
+        else:
+            # Try to find female voice (usually Zira on Windows)
+            for v in available_voices:
+                if 'zira' in v.name.lower() or 'female' in v.name.lower():
+                    selected_voice = v.id
+                    break
+            
+            # Fallback: use second voice if available
+            if not selected_voice and len(available_voices) > 1:
+                selected_voice = available_voices[1].id
+            elif not selected_voice:
+                selected_voice = available_voices[0].id
+        
+        # Apply voice and settings
+        if selected_voice:
+            self.engine.setProperty('voice', selected_voice)
+        self.engine.setProperty('rate', 150)      # Speech rate (words per minute)
+        self.engine.setProperty('volume', 1.0)    # Volume (0.0 to 1.0)
     
     def stop(self):
-        """Instantly stop current TTS playback"""
+        """Stop current speech immediately"""
         self._interrupt = True
-        if pygame.mixer.music.get_busy():
-            pygame.mixer.music.stop()
-            pygame.mixer.music.unload()
-        self.is_speaking = False
-        logger.info("🛑 TTS interrupted")
+        try:
+            self.engine.stop()
+        except Exception as e:
+            logger.error(f"Error stopping TTS: {e}")
+        finally:
+            self.is_speaking = False
     
     def speak(self, text, callback=None):
-        """Speak text asynchronously"""
+        """
+        Speak text asynchronously in a separate thread (non-blocking).
+        
+        Args:
+            text: Text to speak
+            callback: Optional function to call when speech finishes
+        """
         def _thread():
             try:
-                self._interrupt = False  # Reset interrupt flag
+                self._interrupt = False
                 self.is_speaking = True
-                logger.debug("🔒 TTS locked")
                 
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-                temp_path = temp_file.name
-                temp_file.close()
-                
-                asyncio.run(edge_tts.Communicate(text, self.voice).save(temp_path))
-                
-                pygame.mixer.music.load(temp_path)
-                pygame.mixer.music.play()
-                logger.debug("▶️ Playback started")
-                
-                # Check for interrupt flag during playback
-                while pygame.mixer.music.get_busy() and not self._interrupt:
-                    pygame.time.Clock().tick(10)
-                
-                if self._interrupt:
-                    pygame.mixer.music.stop()
-                    logger.debug("⏹️ Playback interrupted")
-                
-                pygame.mixer.music.unload()
-                os.unlink(temp_path)
-                logger.debug("⏹️ Playback finished")
+                # Speak synchronously (pyttsx3 blocks until done or stopped)
+                self.engine.say(text)
+                self.engine.runAndWait()
                 
             except Exception as e:
                 logger.error(f"TTS error: {e}")
             finally:
                 self.is_speaking = False
-                logger.debug("🔓 TTS unlocked")
                 if callback:
-                    callback()
+                    try:
+                        callback()
+                    except Exception as e:
+                        logger.error(f"Callback error: {e}")
         
         threading.Thread(target=_thread, daemon=True).start()
     
@@ -745,15 +770,12 @@ class LinnyAssistant:
         
         # MUTE IMMEDIATELY to prevent echo detection
         self.is_muted = True
-        logger.debug("🔇 App launch: Mic muted immediately")
         time.sleep(0.15)  # Give listening loop time to detect mute flag
         
         def _post_launch_unmute():
             """Callback to unmute mic 2 seconds after TTS completes"""
-            logger.debug("⏳ App launch: 2-second delay before unmute")
             time.sleep(2)
             self.is_muted = False
-            logger.debug("✓ App launch: Mic unmuted")
         
         try:
             # ================================================================
@@ -1102,13 +1124,13 @@ class LinnyAssistant:
             try:
                 # STRICT AUDIO LOCKING
                 while self.voice.is_speaking or self.is_muted:
-                    logger.debug(f"🔒 Locked (speaking={self.voice.is_speaking}, muted={self.is_muted})")
+                    pass
                     time.sleep(0.1)
                 
                 cycle += 1
                 if cycle % 500 == 0:
                     gc.collect()
-                    logger.debug(f"🧹 Cycle {cycle}")
+                    pass
                 
                 if source is None:
                     logger.warning("Audio source lost, re-opening...")
@@ -1122,19 +1144,16 @@ class LinnyAssistant:
                         continue
                 
                 try:
-                    logger.debug("⏺️ Listening...")
                     audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=8)
                     
                     # CRITICAL: Discard audio if captured during TTS or while muted
                     if self.voice.is_speaking or self.is_muted:
-                        logger.debug("🗑️ Discarding audio captured during TTS/mute")
                         continue
                         
                 except sr.WaitTimeoutError:
-                    logger.debug("⏳ Timeout")
                     continue
                 except sr.UnknownValueError:
-                    logger.debug("🔇 Unclear")
+                    pass
                     continue
                 except sr.RequestError as e:
                     logger.warning(f"Recognition error: {e}")
@@ -1146,12 +1165,11 @@ class LinnyAssistant:
                 
                 # Recognize
                 try:
-                    logger.debug("🔄 Recognizing...")
                     text = self.recognizer.recognize_google(audio)
                     logger.info(f"✨ Recognized: {text}")
                     threading.Thread(target=self.execute_command, args=(text,), daemon=True).start()
                 except sr.UnknownValueError:
-                    logger.debug("🔇 No speech")
+                    pass
                     continue
                 except sr.RequestError as e:
                     logger.warning(f"API error: {e}")
@@ -1630,7 +1648,7 @@ class LinnyApp:
         if self.headless:
             try:
                 while True:
-                    pygame.time.Clock().tick(1)
+                    time.sleep(1)
             except KeyboardInterrupt:
                 self._exit_app()
         else:
