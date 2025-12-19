@@ -535,63 +535,77 @@ class CalendarManager:
 # VOICE ENGINE - TTS Only
 # ============================================================================
 class VoiceEngine:
-    """Handles TTS with pyttsx3 (100% Offline)"""
+    """Handles TTS with pyttsx3 (100% Offline) - Thread-safe per-call engine"""
     
     def __init__(self, voice="en-PH-RosaNeural"):
-        self.engine = pyttsx3.init()
-        self.engine.setProperty('rate', 150)  # Speech rate
         self.is_speaking = False
         self._interrupt = False
-        self._set_voice()
+        logger.info("✓ VoiceEngine initialized (per-call engine mode)")
     
-    def _set_voice(self):
-        """Set female voice (Zira priority for SAPI5)"""
+    def _create_engine(self):
+        """Create a fresh pyttsx3 engine for each speech call"""
         try:
-            voices = self.engine.getProperty('voices')
-            # Priority: Zira (female) > others
+            engine = pyttsx3.init()
+            engine.setProperty('rate', 150)
+            engine.setProperty('volume', 1.0)  # Maximum volume
+            
+            # Set female voice (Zira)
+            voices = engine.getProperty('voices')
             for voice in voices:
                 if 'zira' in voice.name.lower():
-                    self.engine.setProperty('voice', voice.id)
-                    logger.info(f"✓ Voice: {voice.name}")
-                    return
-            # Fallback to first available voice
+                    engine.setProperty('voice', voice.id)
+                    return engine
+            
+            # Fallback to first voice
             if voices:
-                self.engine.setProperty('voice', voices[0].id)
-                logger.info(f"✓ Voice: {voices[0].name}")
+                engine.setProperty('voice', voices[0].id)
+            
+            return engine
         except Exception as e:
-            logger.warning(f"Voice selection failed: {e}")
+            logger.error(f"Failed to create pyttsx3 engine: {e}", exc_info=True)
+            return None
     
     def stop(self):
         """Stop TTS playback"""
         self._interrupt = True
-        try:
-            self.engine.stop()
-        except:
-            pass
         self.is_speaking = False
         logger.info("🛑 TTS interrupted")
     
     def speak(self, text, callback=None):
-        """Speak text asynchronously"""
-        def _thread():
+        """Speak text using a fresh pyttsx3 engine"""
+        def _speak_thread():
+            engine = None
             try:
                 self._interrupt = False
                 self.is_speaking = True
-                logger.info(f"🔊 Speaking: {text[:50]}...")
+                logger.info(f"🔊 Speaking: {text[:60]}...")
                 
-                self.engine.say(text)
-                self.engine.runAndWait()
-                logger.debug("✓ Speech complete")
+                # Create fresh engine for this call
+                engine = self._create_engine()
+                if not engine:
+                    logger.error("Could not create TTS engine")
+                    return
+                
+                # Say the text
+                engine.say(text)
+                engine.runAndWait()
+                logger.info("✓ Speech complete")
                 
             except Exception as e:
                 logger.error(f"TTS error: {e}", exc_info=True)
             finally:
                 self.is_speaking = False
+                # Clean up engine
+                try:
+                    if engine:
+                        engine.stop()
+                except:
+                    pass
                 if callback:
                     callback()
         
-        # Use non-daemon thread so pyttsx3 can complete
-        thread = threading.Thread(target=_thread, daemon=False)
+        # Start in background thread
+        thread = threading.Thread(target=_speak_thread, daemon=False)
         thread.start()
     
     def set_voice(self, voice):
