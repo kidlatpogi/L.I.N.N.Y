@@ -684,8 +684,18 @@ class LinnyAssistant:
         self.is_muted = False
         
         self.recognizer = sr.Recognizer()
-        self.microphone = sr.Microphone()
+        # Allow user to configure specific microphone from config
+        mic_index = self.config.get("microphone_index", None)
+        self.microphone = sr.Microphone(device_index=mic_index) if mic_index is not None else sr.Microphone()
         self._audio_source = None
+        
+        # Log which microphone is being used
+        if mic_index is not None:
+            try:
+                mics = sr.Microphone.list_microphone_names()
+                logger.info(f"🎤 Using microphone: [{mic_index}] {mics[mic_index] if mic_index < len(mics) else 'Unknown'}")
+            except:
+                pass
     
     def _get_weather(self):
         """Fetch weather from Open-Meteo with contextual advice"""
@@ -1119,25 +1129,25 @@ class LinnyAssistant:
         logger.info("🎤 Listening loop started...")
         source = self._audio_source
         cycle = 0
+        no_speech_count = 0
+        timeout_count = 0
         
         while self.is_listening:
             try:
                 # STRICT AUDIO LOCKING
                 while self.voice.is_speaking or self.is_muted:
-                    pass
                     time.sleep(0.1)
                 
                 cycle += 1
                 if cycle % 500 == 0:
                     gc.collect()
-                    pass
                 
                 if source is None:
                     logger.warning("Audio source lost, re-opening...")
                     try:
                         source = self.microphone.__enter__()
                         self._audio_source = source
-                        # No recalibration - using initial calibration from start_listening()
+                        logger.info("✓ Audio source reopened")
                     except Exception as e:
                         logger.error(f"Re-open failed: {e}")
                         time.sleep(1)
@@ -1148,12 +1158,20 @@ class LinnyAssistant:
                     
                     # CRITICAL: Discard audio if captured during TTS or while muted
                     if self.voice.is_speaking or self.is_muted:
+                        logger.info("🗑️ Discarding audio (TTS/mute active)")
                         continue
+                    
+                    timeout_count = 0
                         
                 except sr.WaitTimeoutError:
+                    timeout_count += 1
+                    if timeout_count % 10 == 0:
+                        logger.info(f"⏱️ Timeout waiting for speech (listening, no sound detected)")
                     continue
                 except sr.UnknownValueError:
-                    pass
+                    no_speech_count += 1
+                    if no_speech_count % 5 == 0:
+                        logger.info(f"🔇 No speech detected in audio")
                     continue
                 except sr.RequestError as e:
                     logger.warning(f"Recognition error: {e}")
@@ -1165,12 +1183,20 @@ class LinnyAssistant:
                 
                 # Recognize
                 try:
-                    text = self.recognizer.recognize_google(audio)
+                    no_speech_count = 0
+                    text = self.recognizer.recognize_google(audio, language='en-US')
                     logger.info(f"✨ Recognized: {text}")
                     threading.Thread(target=self.execute_command, args=(text,), daemon=True).start()
                 except sr.UnknownValueError:
-                    pass
-                    continue
+                    # Try alternative language (Tagalog/Filipino)
+                    try:
+                        text = self.recognizer.recognize_google(audio, language='fil-PH')
+                        logger.info(f"✨ Recognized (Tagalog): {text}")
+                        threading.Thread(target=self.execute_command, args=(text,), daemon=True).start()
+                    except sr.UnknownValueError:
+                        no_speech_count += 1
+                        logger.info("🔇 No speech detected in audio")
+                        continue
                 except sr.RequestError as e:
                     logger.warning(f"API error: {e}")
                     time.sleep(1)
@@ -1194,20 +1220,35 @@ class LinnyAssistant:
             max_retries = 3
             retry_delay = 1
             
+            # Show available microphones
+            try:
+                mics = sr.Microphone.list_microphone_names()
+                logger.info(f"📻 Available microphones: {len(mics)}")
+                for i, name in enumerate(mics[:5]):  # Show first 5
+                    logger.info(f"    [{i}] {name}")
+                if len(mics) > 5:
+                    logger.info(f"    ... and {len(mics) - 5} more")
+            except Exception as e:
+                logger.warning(f"Could not list microphones: {e}")
+            
             for attempt in range(max_retries):
                 try:
                     self._audio_source = self.microphone.__enter__()
                     logger.info("✓ Audio source opened")
                     
                     # ONE-TIME CALIBRATION (not in loop!)
+                    logger.info("📊 Calibrating ambient noise...")
                     self.recognizer.adjust_for_ambient_noise(self._audio_source, duration=1)
+                    logger.info("✓ Calibration complete")
                     
                     # OPTIMIZED PARAMETERS for maximum responsiveness
                     self.recognizer.pause_threshold = 0.6  # Faster end-of-speech detection
                     self.recognizer.non_speaking_duration = 0.3  # Tighter silence detection
                     self.recognizer.dynamic_energy_threshold = False  # Use initial calibration
+                    self.recognizer.energy_threshold = self.recognizer.energy_threshold  # Keep initial value
                     
-                    logger.info("✓ Recognizer configured (optimized for speed)")
+                    logger.info(f"✓ Recognizer configured (energy threshold: {self.recognizer.energy_threshold:.1f})")
+                    logger.info("✓ Speech recognition: Google Translate (en-US / fil-PH)")
                     break  # Success!
                 except Exception as e:
                     logger.warning(f"Audio setup failed (attempt {attempt+1}/{max_retries}): {e}")
