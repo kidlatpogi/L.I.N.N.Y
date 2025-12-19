@@ -7,13 +7,13 @@ import sys
 import json
 import threading
 import asyncio
-import tempfile
 import logging
 import subprocess
 import webbrowser
 import time
 import requests
 import re
+import gc
 from datetime import datetime, timedelta
 from pathlib import Path
 import ctypes
@@ -25,8 +25,7 @@ import psutil
 
 # Voice & Audio
 import speech_recognition as sr
-import edge_tts
-import pygame
+import pyttsx3
 import pyautogui
 import keyboard  # Global hotkey support
 
@@ -61,7 +60,7 @@ import pywhatkit
 # LOGGING
 # ============================================================================
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("LINNY")
@@ -73,6 +72,11 @@ logging.getLogger('googleapiclient.discovery').setLevel(logging.ERROR)
 logging.getLogger('urllib3').setLevel(logging.ERROR)
 logging.getLogger('PIL').setLevel(logging.ERROR)
 logging.getLogger('kasa').setLevel(logging.WARNING)
+logging.getLogger('comtypes').setLevel(logging.WARNING)
+logging.getLogger('comtypes._comobject').setLevel(logging.WARNING)
+logging.getLogger('comtypes._vtbl').setLevel(logging.WARNING)
+logging.getLogger('comtypes.client._managing').setLevel(logging.WARNING)
+logging.getLogger('comtypes._post_coinit').setLevel(logging.WARNING)
 
 # ============================================================================
 # CONSTANTS & DEFAULT CONFIG
@@ -514,7 +518,7 @@ class CalendarManager:
                 return f"You have no schedule for {label}."
             
             day_name = "Tomorrow" if label == "tomorrow" else "Today"
-            summary = f"{day_name}: {len(active)} event(s)\n"
+            summary = f"{day_name}: {len(active)} events\n"
             for event, start_t, end_t in active[:5]:
                 name = event.get('summary', 'Untitled')
                 if start_t < now < end_t:
@@ -531,20 +535,39 @@ class CalendarManager:
 # VOICE ENGINE - TTS Only
 # ============================================================================
 class VoiceEngine:
-    """Handles TTS with Edge TTS + Pygame playback"""
+    """Handles TTS with pyttsx3 (100% Offline)"""
     
     def __init__(self, voice="en-PH-RosaNeural"):
-        self.voice = voice
-        pygame.mixer.init()
+        self.engine = pyttsx3.init()
+        self.engine.setProperty('rate', 150)  # Speech rate
         self.is_speaking = False
-        self._interrupt = False  # Interrupt flag for instant stop
+        self._interrupt = False
+        self._set_voice()
+    
+    def _set_voice(self):
+        """Set female voice (Zira priority for SAPI5)"""
+        try:
+            voices = self.engine.getProperty('voices')
+            # Priority: Zira (female) > others
+            for voice in voices:
+                if 'zira' in voice.name.lower():
+                    self.engine.setProperty('voice', voice.id)
+                    logger.info(f"✓ Voice: {voice.name}")
+                    return
+            # Fallback to first available voice
+            if voices:
+                self.engine.setProperty('voice', voices[0].id)
+                logger.info(f"✓ Voice: {voices[0].name}")
+        except Exception as e:
+            logger.warning(f"Voice selection failed: {e}")
     
     def stop(self):
-        """Instantly stop current TTS playback"""
+        """Stop TTS playback"""
         self._interrupt = True
-        if pygame.mixer.music.get_busy():
-            pygame.mixer.music.stop()
-            pygame.mixer.music.unload()
+        try:
+            self.engine.stop()
+        except:
+            pass
         self.is_speaking = False
         logger.info("🛑 TTS interrupted")
     
@@ -552,45 +575,28 @@ class VoiceEngine:
         """Speak text asynchronously"""
         def _thread():
             try:
-                self._interrupt = False  # Reset interrupt flag
+                self._interrupt = False
                 self.is_speaking = True
-                logger.debug("🔒 TTS locked")
+                logger.info(f"🔊 Speaking: {text[:50]}...")
                 
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-                temp_path = temp_file.name
-                temp_file.close()
-                
-                asyncio.run(edge_tts.Communicate(text, self.voice).save(temp_path))
-                
-                pygame.mixer.music.load(temp_path)
-                pygame.mixer.music.play()
-                logger.debug("▶️ Playback started")
-                
-                # Check for interrupt flag during playback
-                while pygame.mixer.music.get_busy() and not self._interrupt:
-                    pygame.time.Clock().tick(10)
-                
-                if self._interrupt:
-                    pygame.mixer.music.stop()
-                    logger.debug("⏹️ Playback interrupted")
-                
-                pygame.mixer.music.unload()
-                os.unlink(temp_path)
-                logger.debug("⏹️ Playback finished")
+                self.engine.say(text)
+                self.engine.runAndWait()
+                logger.debug("✓ Speech complete")
                 
             except Exception as e:
-                logger.error(f"TTS error: {e}")
+                logger.error(f"TTS error: {e}", exc_info=True)
             finally:
                 self.is_speaking = False
-                logger.debug("🔓 TTS unlocked")
                 if callback:
                     callback()
         
-        threading.Thread(target=_thread, daemon=True).start()
+        # Use non-daemon thread so pyttsx3 can complete
+        thread = threading.Thread(target=_thread, daemon=False)
+        thread.start()
     
     def set_voice(self, voice):
-        """Change voice"""
-        self.voice = voice
+        """Change voice (placeholder for compatibility)"""
+        pass
 
 # ============================================================================
 # SYSTEM TRAY MANAGER
@@ -808,6 +814,7 @@ class LinnyAssistant:
                  7: Calendar | 8: Weather | 9: Timer | 10: Clip | 11: YouTube | 12: AI
         """
         text_lower = text.lower()
+        logger.info(f"📝 Processing: {text}")
         
         # Wake word check
         wake_words = [
@@ -821,10 +828,10 @@ class LinnyAssistant:
         ]
         
         if not any(w in text_lower for w in wake_words):
-            logger.debug(f"No wake word in: {text}")
+            logger.debug(f"⏭️ No wake word in: {text}")
             return
         
-        logger.info(f"💬 Command: {text}")
+        logger.info(f"✅ Command recognized: {text}")
         
         # ====================================================================
         # PRIORITY 1: SYSTEM COMMANDS
@@ -980,10 +987,16 @@ class LinnyAssistant:
         # ====================================================================
         
         if any(w in text_lower for w in ["time", "oras", "what time"]):
-            logger.info("🕐 Time")
-            tz = pytz.timezone(self.config.get("timezone", "Asia/Manila"))
-            time_str = datetime.now(tz).strftime("%I:%M %p")
-            self.voice.speak(f"It is {time_str}.")
+            try:
+                logger.info("🕐 Time")
+                tz = pytz.timezone(self.config.get("timezone", "Asia/Manila"))
+                time_str = datetime.now(tz).strftime("%I:%M %p")
+                response = f"It is {time_str}."
+                logger.info(f"📢 Response: {response}")
+                self.voice.speak(response)
+            except Exception as e:
+                logger.error(f"Time command error: {e}", exc_info=True)
+                self.voice.speak("I had trouble getting the time.")
             return
         
         # ====================================================================
@@ -991,10 +1004,16 @@ class LinnyAssistant:
         # ====================================================================
         
         if any(w in text_lower for w in ["date", "day", "what day", "what is today"]):
-            logger.info("📅 Date")
-            tz = pytz.timezone(self.config.get("timezone", "Asia/Manila"))
-            date_str = datetime.now(tz).strftime("%A, %B %d, %Y")
-            self.voice.speak(f"Today is {date_str}.")
+            try:
+                logger.info("📅 Date")
+                tz = pytz.timezone(self.config.get("timezone", "Asia/Manila"))
+                date_str = datetime.now(tz).strftime("%A, %B %d, %Y")
+                response = f"Today is {date_str}."
+                logger.info(f"📢 Response: {response}")
+                self.voice.speak(response)
+            except Exception as e:
+                logger.error(f"Date command error: {e}", exc_info=True)
+                self.voice.speak("I had trouble getting the date.")
             return
         
         # ====================================================================
@@ -1629,7 +1648,7 @@ class LinnyApp:
         if self.headless:
             try:
                 while True:
-                    pygame.time.Clock().tick(1)
+                    time.sleep(1)
             except KeyboardInterrupt:
                 self._exit_app()
         else:
