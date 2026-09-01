@@ -153,8 +153,14 @@ Linny/
 └── requirements.txt            # Project dependencies
 ```
 
----
+## License & Permissions
 
-## License & Attribution
+This project is open-source and licensed under the **MIT License**. See the [LICENSE](LICENSE) file for complete terms.
 
-Developed by **kidlatpogi** as an open-source intelligent voice assistant and ambient computing companion for Windows. Distributed under the MIT License.
+### Summary of Rights and Obligations
+
+| Category | Provision | Description |
+| :--- | :--- | :--- |
+| **Permissions** | Commercial Use, Modification, Distribution, Private Use | You are free to run, modify, fork, and distribute this software for personal, educational, or commercial applications. |
+| **Conditions** | License & Copyright Notice | The original copyright notice and permission notice must be retained in all copies or substantial portions of the codebase. |
+| **Limitations** | No Warranty, Limited Liability | The software is provided "as is" without express or implied warranty. The authors hold no liability for any claims or damages. |
