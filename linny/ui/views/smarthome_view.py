@@ -363,20 +363,18 @@ class SmartHomeView(ctk.CTkScrollableFrame):
         self._on_save_device()
         self.status_feedback.configure(text="Testing connection...", text_color=COLOR_TEXT_SECONDARY)
 
-        def _test_worker():
-            success = self.assistant.smart_home.turn_on()
-
+        def _on_result(success: bool, msg: str) -> None:
             def _update():
                 if not self.winfo_exists():
                     return
                 if success:
-                    self.status_feedback.configure(text="Connected and light turned ON.", text_color=COLOR_TEXT_PRIMARY)
+                    self.status_feedback.configure(text=f"Success: {msg}", text_color=COLOR_TEXT_PRIMARY)
                 else:
-                    self.status_feedback.configure(text="Connection failed. Check IP and Tapo credentials.", text_color="#E08080")
+                    self.status_feedback.configure(text=f"Failed: {msg}", text_color="#E08080")
 
             self.after(0, _update)
 
-        threading.Thread(target=_test_worker, daemon=True).start()
+        self.assistant.smart_home.test_connection_async(_on_result)
 
     def _on_slider_change(self, val: float) -> None:
         int_val = int(val)

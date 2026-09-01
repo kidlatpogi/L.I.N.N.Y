@@ -1,17 +1,17 @@
 """
-Smart Home Integration Subsystem (Tapo L530E/L510 & TP-Link Kasa Devices).
-Features:
-- Fix for Tapo TPAP / KLAP protocol negotiation on HTTP Port 80
-- Local LAN Subnet Smart Device Scanner
-- Asynchronous non-blocking control for Turn On/Off, Brightness, Colors, and Presets
-- Explicit device type picker & Tapo cloud authentication with clear 403 diagnostics
+Smart Home Integration Subsystem (Tapo L530E/L535E/L510 & TP-Link Kasa Devices).
+Architecture:
+- Dedicated persistent background asyncio event loop thread
+- 100% non-blocking async execution for Turn On/Off, Brightness, Colors, and Presets
+- Tapo KLAP HTTP Port 80 connection routing with credentials support
+- Real-time diagnostic connection tester that never hangs
 """
 
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
-from typing import Any, Dict, List, Optional, Tuple
+import threading
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..core.config import LinnyConfig
 from ..core.events import EventBus, EventType
@@ -48,7 +48,7 @@ COLOR_PRESETS: Dict[str, Tuple[int, int, int]] = {
 }
 
 DEVICE_FAMILIES = {
-    "Tapo Smart Bulb (L530E/L510/L520)": "SMART.TAPOBULB",
+    "Tapo Smart Bulb (L530E/L535E/L510)": "SMART.TAPOBULB",
     "Tapo Smart Plug (P100/P110)": "SMART.TAPOPLUG",
     "Kasa Smart Bulb (KL110/KL125/KL130)": "IOT.SMARTBULB",
     "Kasa Smart Plug (KP115/HS100/HS110)": "IOT.SMARTPLUGSWITCH",
@@ -57,152 +57,171 @@ DEVICE_FAMILIES = {
 
 
 class SmartDeviceManager:
-    """Non-blocking, thread-safe manager for Kasa and Tapo smart devices."""
+    """Non-blocking, persistent asyncio-loop manager for Kasa and Tapo smart devices."""
 
     def __init__(self, config: LinnyConfig) -> None:
         self.config = config
         self._device = None
-        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="LinnySmartHome")
         self._event_bus = EventBus()
         self._connected = False
-        self._connecting = False
+        self._is_connecting = False
+
+        # Dedicated persistent event loop running in a daemon thread
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._run_loop, daemon=True, name="SmartHomeEventLoop")
+        self._thread.start()
 
         if self.config.smart_bulb_enabled:
             self._async_connect()
 
+    def _run_loop(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
     def close(self) -> None:
-        """Shutdown background thread workers."""
+        """Shutdown background thread workers cleanly."""
         try:
-            self._executor.shutdown(wait=False, cancel_futures=True)
+            async def _shutdown():
+                if self._device and hasattr(self._device, "disconnect"):
+                    try:
+                        await self._device.disconnect()
+                    except Exception:
+                        pass
+                self._device = None
+                self._connected = False
+
+            future = asyncio.run_coroutine_threadsafe(_shutdown(), self._loop)
+            try:
+                future.result(timeout=1.0)
+            except Exception:
+                pass
+            self._loop.call_soon_threadsafe(self._loop.stop)
         except Exception:
             pass
 
     def reload(self, config: LinnyConfig) -> None:
-        """Reload configuration and reconnect."""
+        """Reload configuration and reconnect asynchronously."""
         self.config = config
-        self._device = None
         self._connected = False
         if self.config.smart_bulb_enabled:
             self._async_connect()
 
-    def _async_connect(self) -> None:
-        """Initiate non-blocking connection in worker thread."""
-        if self._connecting:
-            return
-        self._connecting = True
-        self._executor.submit(self._connect_sync)
+    def _async_connect(self, callback: Optional[Callable[[bool, str], None]] = None) -> None:
+        """Initiate non-blocking connection on the persistent event loop."""
+        asyncio.run_coroutine_threadsafe(self._connect_task(callback), self._loop)
 
-    def _connect_sync(self) -> bool:
-        """Connect to device using python-kasa with Tapo/Kasa protocol routing."""
-        self._connecting = True
+    async def _connect_task(self, callback: Optional[Callable[[bool, str], None]] = None) -> bool:
+        if self._is_connecting:
+            return self._connected
+        self._is_connecting = True
+        msg = ""
         try:
             from kasa import Credentials, Device, DeviceConfig, DeviceConnectionParameters, DeviceEncryptionType, DeviceFamily, Discover
 
             ip = self.config.smart_bulb_ip.strip()
             if not ip or ip in ("<BULB_IP>", "0.0.0.0"):
-                logger.info("Smart bulb IP not configured")
                 self._connected = False
-                self._connecting = False
+                self._is_connecting = False
+                if callback:
+                    callback(False, "IP address not configured.")
                 return False
 
             logger.info(f"Connecting to smart device at {ip} (Family: {self.config.smart_bulb_family})...")
 
-            async def _connect_task() -> Any:
-                creds = None
-                if self.config.tapo_email and self.config.tapo_password:
-                    creds = Credentials(
-                        username=self.config.tapo_email,
-                        password=self.config.tapo_password,
-                    )
+            creds = None
+            if self.config.tapo_email and self.config.tapo_password:
+                creds = Credentials(
+                    username=self.config.tapo_email,
+                    password=self.config.tapo_password,
+                )
 
-                # Route 1: Tapo Devices (KLAP HTTP Port 80)
-                is_tapo = "TAPO" in self.config.smart_bulb_family or self.config.smart_bulb_family == "SMART.TAPOBULB"
-                if is_tapo:
-                    family = DeviceFamily.SmartTapoBulb if "BULB" in self.config.smart_bulb_family else DeviceFamily.SmartTapoPlug
-                    params = DeviceConnectionParameters(
-                        device_family=family,
-                        encryption_type=DeviceEncryptionType.Klap,
-                        login_version=2,
-                        https=False,
-                        http_port=80,
-                    )
-                    cfg = DeviceConfig(host=ip, credentials=creds, connection_type=params)
-                    try:
-                        dev = await Device.connect(config=cfg)
-                        await dev.update()
-                        return dev
-                    except Exception as e:
-                        err_str = str(e).lower()
-                        if "403" in err_str or "auth" in err_str:
-                            logger.warning("Tapo Authentication Required: Please enter your Tapo email and password in Settings.")
-                        else:
-                            logger.debug(f"Direct Tapo connection error: {e}")
+            # Route 1: Tapo Devices via HTTP Port 80 KLAP
+            is_tapo = "TAPO" in self.config.smart_bulb_family or self.config.smart_bulb_family in ("SMART.TAPOBULB", "AUTO")
+            dev = None
 
-                # Route 2: Discover Single
+            if is_tapo:
+                family = DeviceFamily.SmartTapoBulb if "BULB" in self.config.smart_bulb_family or self.config.smart_bulb_family == "AUTO" else DeviceFamily.SmartTapoPlug
+                params = DeviceConnectionParameters(
+                    device_family=family,
+                    encryption_type=DeviceEncryptionType.Klap,
+                    login_version=2,
+                    https=False,
+                    http_port=80,
+                )
+                cfg = DeviceConfig(host=ip, credentials=creds, connection_type=params)
                 try:
-                    dev = await Discover.discover_single(ip, credentials=creds, timeout=4)
+                    dev = await Device.connect(config=cfg)
+                    await dev.update()
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "403" in err_str or "auth" in err_str:
+                        msg = "Tapo Authentication Failed (403): Check Tapo password / Device Account in Tapo App."
+                        logger.warning(msg)
+                    else:
+                        logger.debug(f"Direct Tapo connection: {e}")
+
+            # Route 2: Discover single device
+            if not dev:
+                try:
+                    dev = await Discover.discover_single(ip, credentials=creds, timeout=3)
                     if dev:
                         await dev.update()
-                        return dev
                 except Exception as e:
-                    logger.debug(f"Discover single error: {e}")
+                    logger.debug(f"Discover single: {e}")
 
-                # Route 3: Standard Kasa IOT device (port 9999) only if NOT Tapo
-                if not is_tapo:
+            # Route 3: Standard Kasa IOT device (port 9999) only if not Tapo
+            if not dev and not is_tapo:
+                try:
                     cfg = DeviceConfig(host=ip, credentials=creds)
                     dev = await Device.connect(config=cfg)
                     await dev.update()
-                    return dev
+                except Exception as e:
+                    logger.debug(f"Kasa connect: {e}")
 
-                return None
+            if dev:
+                self._device = dev
+                self._connected = True
+                msg = f"Connected to {dev.alias or 'Smart Device'} ({dev.model})"
+                logger.info(msg)
+                self._event_bus.publish(
+                    EventType.SMART_HOME_UPDATE,
+                    {"state": "connected", "alias": dev.alias, "model": dev.model},
+                )
+                if callback:
+                    callback(True, msg)
+                return True
+            else:
+                self._device = None
+                self._connected = False
+                if not msg:
+                    msg = f"Could not reach device at {ip}."
+                logger.warning(msg)
+                if callback:
+                    callback(False, msg)
+                return False
 
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                self._device = loop.run_until_complete(_connect_task())
-                self._connected = bool(self._device is not None)
-                if self._connected:
-                    logger.info(f"Connected to smart device: {self._device.alias} ({self._device.model})")
-                    self._event_bus.publish(
-                        EventType.SMART_HOME_UPDATE,
-                        {"state": "connected", "alias": self._device.alias, "model": self._device.model},
-                    )
-                else:
-                    logger.warning(f"Could not reach smart device at {ip}")
-            finally:
-                loop.close()
-
-            self._connecting = False
-            return self._connected
         except Exception as e:
-            logger.warning(f"Smart bulb connection failed: {e}")
+            logger.warning(f"Smart device connection error: {e}")
             self._device = None
             self._connected = False
-            self._connecting = False
+            if callback:
+                callback(False, str(e))
             return False
+        finally:
+            self._is_connecting = False
 
     def scan_network_devices(self, timeout: float = 4.0) -> List[Dict[str, Any]]:
-        """
-        Scan local network for TP-Link Kasa and Tapo smart devices.
-        Returns list of dicts with {ip, alias, model, family, mac}.
-        """
+        """Scan local network for smart devices on the persistent loop."""
         logger.info("Scanning local network for smart devices...")
         discovered_list: List[Dict[str, Any]] = []
 
-        try:
+        async def _scan():
             from kasa import Credentials, Discover
-
             creds = None
             if self.config.tapo_email and self.config.tapo_password:
                 creds = Credentials(username=self.config.tapo_email, password=self.config.tapo_password)
-
-            async def _scan() -> Dict[str, Any]:
-                return await Discover.discover(credentials=creds, timeout=int(timeout))
-
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             try:
-                results = loop.run_until_complete(_scan())
+                results = await Discover.discover(credentials=creds, timeout=int(timeout))
                 for ip, dev in results.items():
                     discovered_list.append({
                         "ip": ip,
@@ -211,11 +230,14 @@ class SmartDeviceManager:
                         "family": getattr(dev, "device_type", "SMART.TAPOBULB"),
                         "mac": getattr(dev, "mac", ""),
                     })
-            finally:
-                loop.close()
+            except Exception as e:
+                logger.warning(f"Network discovery error: {e}")
 
-        except Exception as e:
-            logger.warning(f"Network discovery scan error: {e}")
+        future = asyncio.run_coroutine_threadsafe(_scan(), self._loop)
+        try:
+            future.result(timeout=timeout + 2)
+        except Exception:
+            pass
 
         if not discovered_list:
             if self.config.smart_bulb_ip and self.config.smart_bulb_ip not in ("<BULB_IP>", "0.0.0.0"):
@@ -230,64 +252,68 @@ class SmartDeviceManager:
         logger.info(f"Scan complete: Found {len(discovered_list)} device(s)")
         return discovered_list
 
-    def _run_device_action(self, action_coro_fn) -> bool:
-        """Execute an asynchronous device action in the executor."""
-        if not self._connected or not self._device:
-            if not self._connect_sync() or not self._device:
-                return False
+    def _execute_device_action(self, action_fn, success_callback: Optional[Callable[[], None]] = None) -> None:
+        """Execute a device action asynchronously on the persistent event loop (100% non-blocking)."""
+        async def _runner():
+            if not self._connected or not self._device:
+                connected = await self._connect_task()
+                if not connected or not self._device:
+                    return
 
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             try:
-                loop.run_until_complete(action_coro_fn(self._device))
-                return True
-            finally:
-                loop.close()
-        except Exception as e:
-            logger.error(f"Smart home action error: {e}")
-            self._connected = False
+                await action_fn(self._device)
+                if success_callback:
+                    success_callback()
+            except Exception as e:
+                logger.warning(f"Smart home action error: {e}")
+                self._connected = False
+
+        asyncio.run_coroutine_threadsafe(_runner(), self._loop)
+
+    def turn_on(self, callback: Optional[Callable[[bool], None]] = None) -> bool:
+        """Turn on the smart light (Non-blocking)."""
+        if not self._connected or not self._device:
+            if callback:
+                callback(False)
             return False
 
-    def turn_on(self) -> bool:
-        """Turn on the smart light."""
-        async def _action(dev: Any) -> None:
+        async def _action(dev: Any):
             await dev.turn_on()
             await dev.update()
+            logger.info("Smart light turned ON")
+            self._event_bus.publish(EventType.SMART_HOME_UPDATE, {"state": "on"})
+            if callback:
+                callback(True)
 
-        future = self._executor.submit(self._run_device_action, _action)
-        try:
-            res = future.result(timeout=5)
-            if res:
-                logger.info("Smart light turned ON")
-                self._event_bus.publish(EventType.SMART_HOME_UPDATE, {"state": "on"})
-            return res
-        except Exception as e:
-            logger.warning(f"Turn on error: {e}")
+        self._execute_device_action(_action)
+        return True
+
+    def turn_off(self, callback: Optional[Callable[[bool], None]] = None) -> bool:
+        """Turn off the smart light (Non-blocking)."""
+        if not self._connected or not self._device:
+            if callback:
+                callback(False)
             return False
 
-    def turn_off(self) -> bool:
-        """Turn off the smart light."""
-        async def _action(dev: Any) -> None:
+        async def _action(dev: Any):
             await dev.turn_off()
             await dev.update()
+            logger.info("Smart light turned OFF")
+            self._event_bus.publish(EventType.SMART_HOME_UPDATE, {"state": "off"})
+            if callback:
+                callback(True)
 
-        future = self._executor.submit(self._run_device_action, _action)
-        try:
-            res = future.result(timeout=5)
-            if res:
-                logger.info("Smart light turned OFF")
-                self._event_bus.publish(EventType.SMART_HOME_UPDATE, {"state": "off"})
-            return res
-        except Exception as e:
-            logger.warning(f"Turn off error: {e}")
-            return False
+        self._execute_device_action(_action)
+        return True
 
     def set_brightness(self, level: int) -> bool:
-        """Set brightness level (1-100%)."""
+        """Set brightness level 1-100% (Non-blocking)."""
+        if not self._connected or not self._device:
+            return False
+
         clamped = max(1, min(100, int(level)))
 
-        async def _action(dev: Any) -> None:
+        async def _action(dev: Any):
             from kasa import Module
             light = dev.modules.get(Module.Light) if hasattr(dev, "modules") else None
             if not light and hasattr(dev, "modules"):
@@ -298,21 +324,18 @@ class SmartDeviceManager:
             elif hasattr(dev, "set_brightness"):
                 await dev.set_brightness(clamped)
             await dev.update()
+            logger.info(f"Smart light brightness set to {clamped}%")
+            self._event_bus.publish(EventType.SMART_HOME_UPDATE, {"brightness": clamped})
 
-        future = self._executor.submit(self._run_device_action, _action)
-        try:
-            res = future.result(timeout=5)
-            if res:
-                logger.info(f"Smart light brightness set to {clamped}%")
-                self._event_bus.publish(EventType.SMART_HOME_UPDATE, {"brightness": clamped})
-            return res
-        except Exception as e:
-            logger.warning(f"Set brightness error: {e}")
-            return False
+        self._execute_device_action(_action)
+        return True
 
     def set_color_temp(self, temp_kelvin: int) -> bool:
-        """Set white color temperature (2500K - 6500K)."""
-        async def _action(dev: Any) -> None:
+        """Set white color temperature (Non-blocking)."""
+        if not self._connected or not self._device:
+            return False
+
+        async def _action(dev: Any):
             from kasa import Module
             light = dev.modules.get(Module.Light) if hasattr(dev, "modules") else None
             if not light and hasattr(dev, "modules"):
@@ -324,16 +347,15 @@ class SmartDeviceManager:
                 await dev.set_color_temp(temp_kelvin)
             await dev.update()
 
-        future = self._executor.submit(self._run_device_action, _action)
-        try:
-            return future.result(timeout=5)
-        except Exception as e:
-            logger.warning(f"Set color temp error: {e}")
-            return False
+        self._execute_device_action(_action)
+        return True
 
     def set_hsv(self, h: int, s: int, v: int) -> bool:
-        """Set HSV color."""
-        async def _action(dev: Any) -> None:
+        """Set HSV color (Non-blocking)."""
+        if not self._connected or not self._device:
+            return False
+
+        async def _action(dev: Any):
             from kasa import Module
             light = dev.modules.get(Module.Light) if hasattr(dev, "modules") else None
             if not light and hasattr(dev, "modules"):
@@ -345,12 +367,8 @@ class SmartDeviceManager:
                 await dev.set_hsv(h, s, v)
             await dev.update()
 
-        future = self._executor.submit(self._run_device_action, _action)
-        try:
-            return future.result(timeout=5)
-        except Exception as e:
-            logger.warning(f"Set HSV color error: {e}")
-            return False
+        self._execute_device_action(_action)
+        return True
 
     def set_color(self, color_name: str) -> bool:
         name = color_name.lower().strip()
@@ -379,9 +397,62 @@ class SmartDeviceManager:
         elif "relax" in mode_lower or "chill" in mode_lower:
             self.set_brightness(50)
             return self.set_color_temp(2700)
-        else:
-            logger.warning(f"Unknown light mode preset: {mode}")
-            return False
+        return False
+
+    def test_connection_async(self, callback: Callable[[bool, str], None]) -> None:
+        """Dedicated test connection runner with detailed diagnostics."""
+        async def _test():
+            try:
+                from kasa import Credentials, Device, DeviceConfig, DeviceConnectionParameters, DeviceEncryptionType, DeviceFamily, Discover
+
+                ip = self.config.smart_bulb_ip.strip()
+                if not ip or ip in ("<BULB_IP>", "0.0.0.0"):
+                    callback(False, "IP address not configured.")
+                    return
+
+                creds = None
+                if self.config.tapo_email and self.config.tapo_password:
+                    creds = Credentials(username=self.config.tapo_email, password=self.config.tapo_password)
+
+                dev = None
+                family = DeviceFamily.SmartTapoBulb if "BULB" in self.config.smart_bulb_family or self.config.smart_bulb_family == "AUTO" else DeviceFamily.SmartTapoPlug
+                params = DeviceConnectionParameters(
+                    device_family=family,
+                    encryption_type=DeviceEncryptionType.Klap,
+                    login_version=2,
+                    https=False,
+                    http_port=80,
+                )
+                cfg = DeviceConfig(host=ip, credentials=creds, connection_type=params)
+                try:
+                    dev = await Device.connect(config=cfg)
+                    await dev.update()
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "403" in err_str or "auth" in err_str:
+                        callback(False, "Authentication Failed (403): Check Tapo password / Device Account in Tapo App.")
+                        return
+                    logger.debug(f"Direct test connect: {e}")
+
+                if not dev:
+                    try:
+                        dev = await Discover.discover_single(ip, credentials=creds, timeout=3)
+                        if dev:
+                            await dev.update()
+                    except Exception as e:
+                        logger.debug(f"Discover test connect: {e}")
+
+                if dev:
+                    self._device = dev
+                    self._connected = True
+                    callback(True, f"Connected to {dev.alias or 'Smart Device'} ({dev.model})")
+                else:
+                    callback(False, f"Device at {ip} could not be reached.")
+
+            except Exception as ex:
+                callback(False, f"Connection error: {ex}")
+
+        asyncio.run_coroutine_threadsafe(_test(), self._loop)
 
     def is_connected(self) -> bool:
         return self._connected

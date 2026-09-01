@@ -326,7 +326,7 @@ class OverviewView(ctk.CTkFrame):
         greet_btn.pack(fill="x", padx=16, pady=(0, 16))
 
         # Fetch weather in background non-blocking
-        threading.Thread(target=self._update_weather_preview, daemon=True).start()
+        self.after(300, lambda: threading.Thread(target=self._update_weather_preview, daemon=True).start())
 
     def _subscribe_events(self) -> None:
         self.event_bus.subscribe(EventType.STATE_CHANGED, self._on_state_changed)
@@ -392,9 +392,16 @@ class OverviewView(ctk.CTkFrame):
                 text = "Weather currently offline"
 
             def _update():
-                if self.winfo_exists():
-                    self.weather_label.configure(text=text)
+                try:
+                    if self.winfo_exists():
+                        self.weather_label.configure(text=text)
+                except Exception:
+                    pass
 
-            self.after(0, _update)
+            try:
+                if self.winfo_exists():
+                    self.after(0, _update)
+            except Exception:
+                pass
         except Exception:
             pass

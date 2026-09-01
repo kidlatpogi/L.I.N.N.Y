@@ -1,7 +1,7 @@
 """
-Core Linny Voice Assistant Engine and Intent Router.
-Dispatches voice and text queries to system actions, media controls,
-smart home automation, Google Calendar, weather, app launcher, and AI brain.
+Linny Master Orchestrator and Voice Query Controller.
+Coordinates Speech Recognition (STT), Neural Synthesis (TTS), Multi-Provider AI Reasoning,
+Smart Home Control, Google Calendar, and Windows OS Process Automation.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import re
 import threading
 import time
 from datetime import datetime
-from typing import Callable, List, Optional
+from typing import Optional, Tuple
 
 import pytz
 
@@ -30,10 +30,23 @@ from .logger import get_logger
 logger = get_logger("assistant")
 
 WAKE_WORDS = [
-    "linny", "lenny", "lini", "leni", "linnie", "lynny", "lanny",
     "hey linny", "ok linny", "okay linny", "hi linny", "hello linny",
+    "linny", "lenny", "lini", "leni", "linnie", "lynny", "lanny",
+    "hey", "hi", "hello", "ok", "okay",
     "mini", "minny", "minnie", "mimi", "dini", "dinny", "nini", "ninny",
     "ginny", "hinny", "finny", "vinny", "winny", "pinny", "lhinny",
+]
+
+DIRECT_INTENT_KEYWORDS = [
+    "open ", "launch ", "start ", "run ", "accio ",
+    "weather", "forecast", "temperature", "panahon",
+    "time", "what time", "current time", "anong oras", "date", "what day",
+    "schedule", "calendar", "agenda", "events today",
+    "lights on", "turn on light", "turn on lights", "bulb on", "buksan ilaw",
+    "lights off", "turn off light", "turn off lights", "bulb off", "patayin ilaw",
+    "pause", "stop music", "unpause", "resume", "play music", "next song", "next track",
+    "skip song", "previous song", "prev song", "volume up", "volume down", "mute",
+    "screenshot", "clip that", "timer", "shutdown", "restart", "lock workstation", "lock pc"
 ]
 
 
@@ -97,23 +110,33 @@ class LinnyAssistant:
         return self.listener.start()
 
     def stop(self) -> None:
-        """Stop listening and speech synthesis."""
+        """Stop listening, speech synthesis, and workers."""
         self.voice.stop()
         self.listener.stop()
+        self.smart_home.close()
 
     def toggle_mute(self) -> bool:
         return self.listener.toggle_mute()
 
     def is_wake_word_present(self, text: str) -> Tuple[bool, str]:
-        """Check if wake word is present and extract command text."""
+        """Check if wake word is present and extract clean command text."""
         t_lower = text.lower().strip()
+
+        # Check explicit wake words
         for w in WAKE_WORDS:
-            if w in t_lower:
-                # Remove wake word from command string
-                pattern = re.compile(re.escape(w), re.IGNORECASE)
+            if t_lower.startswith(w + " ") or t_lower == w:
+                cleaned = t_lower[len(w):].strip()
+                return True, cleaned
+            elif w in t_lower:
+                pattern = re.compile(rf"\b{re.escape(w)}\b", re.IGNORECASE)
                 cleaned = pattern.sub("", text).strip()
                 return True, cleaned
-        return False, text
+
+        # Check if direct command matches a recognized action
+        if any(keyword in t_lower for keyword in DIRECT_INTENT_KEYWORDS) or t_lower in self.launcher.aliases:
+            return True, text.strip()
+
+        return False, text.strip()
 
     def handle_voice_query(self, raw_text: str) -> None:
         """Entry point for incoming voice transcriptions."""
@@ -121,12 +144,16 @@ class LinnyAssistant:
             return
 
         has_wake, clean_command = self.is_wake_word_present(raw_text)
-        if not has_wake:
-            logger.debug(f"Ignored speech without wake word: '{raw_text}'")
-            return
+        command_to_run = clean_command if (has_wake and clean_command) else raw_text.strip()
 
-        logger.info(f"Processing command: '{clean_command or raw_text}'")
-        self.execute_command(clean_command or raw_text)
+        if not has_wake:
+            logger.debug(f"Speech received without explicit wake word: '{raw_text}'")
+            # If length is substantial or contains question words, still process
+            if not any(q in raw_text.lower() for q in ["what", "who", "where", "how", "why", "can you", "tell me"]):
+                return
+
+        logger.info(f"Processing command: '{command_to_run}'")
+        self.execute_command(command_to_run)
 
     def execute_command(self, query: str) -> None:
         """
@@ -146,12 +173,12 @@ class LinnyAssistant:
         """
         q_lower = query.lower().strip()
 
-        # Helper: Speak with temporary listener mute to prevent echo
+        # Helper: Speak with temporary listener mute to prevent self-echo
         def _speak(msg: str) -> None:
             self.listener.set_muted(True)
 
             def _unmute():
-                time.sleep(0.5)
+                time.sleep(0.4)
                 self.listener.set_muted(False)
 
             self.voice.speak(msg, callback=_unmute)
@@ -187,25 +214,25 @@ class LinnyAssistant:
         # --------------------------------------------------------------------
         # Priority 2: Media Controls
         # --------------------------------------------------------------------
-        if any(w in q_lower for w in ["resume", "unpause", "play music", "continue music"]):
+        if any(w in q_lower for w in ["resume", "unpause", "play music", "continue music"]) or q_lower == "play":
             logger.info("Media: Play/Resume")
             self.power.media_play_pause()
             _speak("Resuming playback.")
             return
 
-        if any(w in q_lower for w in ["pause", "stop music", "pause music"]):
+        if any(w in q_lower for w in ["pause", "stop music", "pause music"]) or q_lower == "stop":
             logger.info("Media: Pause")
             self.power.media_play_pause()
             _speak("Paused.")
             return
 
-        if any(w in q_lower for w in ["next song", "next track", "skip song", "skip track"]):
+        if any(w in q_lower for w in ["next song", "next track", "skip song", "skip track", "next"]):
             logger.info("Media: Next Track")
             self.power.media_next()
             _speak("Skipping track.")
             return
 
-        if any(w in q_lower for w in ["previous song", "prev song", "previous track"]):
+        if any(w in q_lower for w in ["previous song", "prev song", "previous track", "prev track", "previous", "prev"]):
             logger.info("Media: Previous Track")
             self.power.media_prev()
             _speak("Previous track.")
@@ -223,7 +250,7 @@ class LinnyAssistant:
             _speak("Volume lowered.")
             return
 
-        if q_lower == "mute" or "mute audio" in q_lower:
+        if q_lower in ("mute", "mute audio", "mute sound"):
             logger.info("Media: Mute Audio")
             self.power.media_mute()
             _speak("Audio muted.")
@@ -232,87 +259,84 @@ class LinnyAssistant:
         # --------------------------------------------------------------------
         # Priority 3: Smart Light Controls (Tapo & Kasa)
         # --------------------------------------------------------------------
+        # Turn On Lights
+        if any(w in q_lower for w in [
+            "turn on lights", "lights on", "turn on the light", "turn on the lights", "turn on bulb", "bulb on",
+            "open lights", "open light", "open the lights", "open the light",
+            "buksan ilaw", "buksan ang ilaw", "buksan mo ang ilaw"
+        ]):
+            self.smart_home.turn_on()
+            _speak("Turning on the lights.")
+            return
+
+        # Turn Off Lights
+        if any(w in q_lower for w in [
+            "turn off lights", "lights off", "turn off the light", "turn off the lights", "turn off bulb", "bulb off",
+            "close lights", "close light", "close the lights", "close the light",
+            "patayin ilaw", "patayin ang ilaw", "patay ilaw"
+        ]):
+            self.smart_home.turn_off()
+            _speak("Turning off the lights.")
+            return
+
         # Brightness percentage
         if ("light" in q_lower or "bulb" in q_lower or "brightness" in q_lower) and any(c in q_lower for c in ["%", "percent", "set", "to"]):
             match = re.search(r"(\d+)", q_lower)
             if match:
                 level = int(match.group(1))
-                if self.smart_home.set_brightness(level):
-                    _speak(f"Lights set to {level} percent.")
-                else:
-                    _speak("Smart bulb is currently offline or unreachable.")
+                self.smart_home.set_brightness(level)
+                _speak(f"Lights set to {level} percent.")
                 return
 
         # Specific Color
-        if "color" in q_lower and any(w in q_lower for w in ["light", "bulb", "lamp"]):
+        if "color" in q_lower or any(w in q_lower for w in ["light", "bulb"]):
             for color_name in ["red", "crimson", "blue", "cyan", "green", "violet", "purple", "yellow", "orange", "pink", "warm"]:
                 if color_name in q_lower:
-                    if self.smart_home.set_color(color_name):
-                        _speak(f"Lights set to {color_name}.")
-                    else:
-                        _speak(f"I couldn't change the light color to {color_name}.")
+                    self.smart_home.set_color(color_name)
+                    _speak(f"Lights set to {color_name}.")
                     return
 
         # Light Modes
         if any(m in q_lower for m in ["focus mode", "movie mode", "gaming mode", "game mode", "night mode", "relax mode"]):
             for mode in ["focus", "movie", "gaming", "night", "relax"]:
                 if mode in q_lower:
-                    if self.smart_home.set_mode(mode):
-                        _speak(f"{mode.capitalize()} mode activated.")
-                    else:
-                        _speak(f"Smart bulb is currently offline.")
+                    self.smart_home.set_mode(mode)
+                    _speak(f"{mode.capitalize()} mode activated.")
                     return
-
-        # Turn On Lights
-        if any(w in q_lower for w in [
-            "turn on lights", "lights on", "turn on the light", "turn on bulb", "bulb on",
-            "buksan ilaw", "buksan ang ilaw", "buksan mo ang ilaw"
-        ]):
-            if self.smart_home.turn_on():
-                _speak("Lights turned on.")
-            else:
-                _speak("I couldn't reach the smart bulb.")
-            return
-
-        # Turn Off Lights
-        if any(w in q_lower for w in [
-            "turn off lights", "lights off", "turn off the light", "turn off bulb", "bulb off",
-            "patayin ilaw", "patayin ang ilaw", "patay ilaw"
-        ]):
-            if self.smart_home.turn_off():
-                _speak("Lights turned off.")
-            else:
-                _speak("I couldn't reach the smart bulb.")
-            return
 
         # --------------------------------------------------------------------
         # Priority 4: Application / Game / Website Launching
         # --------------------------------------------------------------------
-        launch_verb = None
+        # Check direct launch verbs
         for verb in ["launch", "open", "start", "run", "accio"]:
-            if verb in q_lower:
+            if q_lower.startswith(verb + " ") or f" {verb} " in q_lower:
                 parts = q_lower.split(verb, 1)
                 if len(parts) > 1 and parts[1].strip():
                     target_app = parts[1].strip()
-                    # Clean wake words that might follow
                     for w in WAKE_WORDS:
-                        target_app = target_app.replace(w, "").strip()
+                        target_app = re.sub(rf"\b{re.escape(w)}\b", "", target_app, flags=re.IGNORECASE).strip()
                     if target_app:
                         success, message = self.launcher.launch(target_app)
                         _speak(message)
                         return
 
+        # Check if query directly names an app alias (e.g. "spotify", "brave", "discord")
+        if q_lower in self.launcher.aliases:
+            success, message = self.launcher.launch(q_lower)
+            _speak(message)
+            return
+
         # --------------------------------------------------------------------
         # Priority 5: Time & Date
         # --------------------------------------------------------------------
-        if any(w in q_lower for w in ["what time", "current time", "anong oras", "oras na", "time check"]):
+        if any(w in q_lower for w in ["what time", "current time", "anong oras", "oras na", "time check", "tell me the time"]) or q_lower == "time":
             tz = pytz.timezone(self.config.timezone)
             now = datetime.now(tz)
             time_str = now.strftime("%I:%M %p")
             _speak(f"It is {time_str}.")
             return
 
-        if any(w in q_lower for w in ["what date", "what is the date", "anong petsa", "what day is today", "today's date"]):
+        if any(w in q_lower for w in ["what date", "what is the date", "anong petsa", "what day is today", "today's date"]) or q_lower == "date":
             tz = pytz.timezone(self.config.timezone)
             now = datetime.now(tz)
             date_str = now.strftime("%A, %B %d, %Y")
@@ -322,7 +346,7 @@ class LinnyAssistant:
         # --------------------------------------------------------------------
         # Priority 6: Google Calendar & Schedule
         # --------------------------------------------------------------------
-        if any(w in q_lower for w in ["schedule", "calendar", "agenda", "events today", "what do i have today"]):
+        if any(w in q_lower for w in ["schedule", "calendar", "agenda", "events today", "what do i have today", "my schedule"]):
             summary = self.calendar.get_schedule(query=q_lower)
             _speak(summary)
             return
@@ -330,7 +354,7 @@ class LinnyAssistant:
         # --------------------------------------------------------------------
         # Priority 7: Weather Forecast
         # --------------------------------------------------------------------
-        if any(w in q_lower for w in ["weather", "panahon", "temperature", "is it going to rain", "forecast"]):
+        if any(w in q_lower for w in ["weather", "panahon", "temperature", "is it going to rain", "forecast", "what is the weather"]):
             weather_text = self.weather.get_voice_summary()
             _speak(weather_text)
             return
@@ -451,8 +475,7 @@ class LinnyAssistant:
                 full_greeting = f"{greeting} {date_time_msg} {weather_summary} {schedule_summary}".strip()
                 logger.info(f"Startup Greeting: {full_greeting}")
                 self.voice.speak(full_greeting)
-
             except Exception as e:
-                logger.error(f"Startup greeting error: {e}")
+                logger.warning(f"Error during startup greeting: {e}")
 
-        threading.Thread(target=_greeting_worker, daemon=True, name="LinnyStartupGreeting").start()
+        threading.Thread(target=_greeting_worker, daemon=True).start()

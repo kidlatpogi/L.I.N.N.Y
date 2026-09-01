@@ -187,7 +187,7 @@ class LinnyAppWindow:
         self.switch_view("overview")
 
     def switch_view(self, view_name: str) -> None:
-        """Instant 0ms tab switching using tkraise."""
+        """Instant 0ms tab switching using explicit grid placement."""
         self.current_view_name = view_name
 
         for key, btn in self.nav_buttons.items():
@@ -207,8 +207,11 @@ class LinnyAppWindow:
                     font=ctk.CTkFont(size=13, weight="normal"),
                 )
 
-        if view_name in self.views:
-            self.views[view_name].tkraise()
+        for key, view in self.views.items():
+            if key == view_name:
+                view.grid(row=0, column=0, sticky="nsew")
+            else:
+                view.grid_remove()
 
     def show(self) -> None:
         if self.root is None:

@@ -147,9 +147,11 @@ class CalendarView(ctk.CTkFrame):
         )
         self.schedule_text.pack(fill="both", expand=True)
 
-        threading.Thread(target=self._on_refresh_schedule, daemon=True).start()
+        self.after(300, self._on_refresh_schedule)
 
     def _on_refresh_schedule(self) -> None:
+        if not self.winfo_exists():
+            return
         self.schedule_text.delete("0.0", "end")
         self.schedule_text.insert("0.0", "Querying calendar events...")
 
@@ -157,10 +159,17 @@ class CalendarView(ctk.CTkFrame):
             summary = self.assistant.calendar.get_schedule("")
 
             def _update():
-                if self.winfo_exists():
-                    self.schedule_text.delete("0.0", "end")
-                    self.schedule_text.insert("0.0", summary)
+                try:
+                    if self.winfo_exists():
+                        self.schedule_text.delete("0.0", "end")
+                        self.schedule_text.insert("0.0", summary)
+                except Exception:
+                    pass
 
-            self.after(0, _update)
+            try:
+                if self.winfo_exists():
+                    self.after(0, _update)
+            except Exception:
+                pass
 
         threading.Thread(target=_worker, daemon=True).start()

@@ -37,10 +37,14 @@ class SpeechListener:
         self._stop_event = threading.Event()
         self._event_bus = EventBus()
 
-        # Optimize recognizer thresholds for responsive voice control
-        self.recognizer.pause_threshold = 0.6
-        self.recognizer.non_speaking_duration = 0.3
+        # Optimize recognizer thresholds for full natural phrase capture
+        self.recognizer.pause_threshold = 1.2
+        self.recognizer.non_speaking_duration = 0.8
+        self.recognizer.phrase_threshold = 0.2
+        self.recognizer.energy_threshold = 200
         self.recognizer.dynamic_energy_threshold = True
+        self.recognizer.dynamic_energy_adjustment_damping = 0.15
+        self.recognizer.dynamic_energy_ratio = 1.5
 
     def toggle_mute(self) -> bool:
         """Toggle microphone mute status."""
@@ -106,7 +110,7 @@ class SpeechListener:
                 with self.microphone as source:
                     # Listen for audio phrase
                     try:
-                        audio = self.recognizer.listen(source, timeout=3.0, phrase_time_limit=8.0)
+                        audio = self.recognizer.listen(source, timeout=3.0, phrase_time_limit=12.0)
                     except sr.WaitTimeoutError:
                         continue
                     except Exception as e:
