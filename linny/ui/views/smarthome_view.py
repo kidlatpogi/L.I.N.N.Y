@@ -164,9 +164,19 @@ class SmartHomeView(ctk.CTkScrollableFrame):
         self.pass_entry.insert(0, self.assistant.config.tapo_password)
         self.pass_entry.pack(side="left", fill="x", expand=True)
 
+        hint_label = ctk.CTkLabel(
+            inner,
+            text="Note: If 403 occurs with Tapo L530/L535 bulbs, enable 'Third-Party Compatibility' in Tapo App > Settings > Advanced Settings (or configure a local Device Account).",
+            font=ctk.CTkFont(size=11),
+            text_color=COLOR_TEXT_SECONDARY,
+            wraplength=620,
+            justify="left",
+        )
+        hint_label.pack(anchor="w", pady=(8, 4))
+
         # Action Buttons
         act_row = ctk.CTkFrame(inner, fg_color="transparent")
-        act_row.pack(fill="x", pady=(12, 0))
+        act_row.pack(fill="x", pady=(8, 0))
 
         save_btn = ctk.CTkButton(
             act_row,
