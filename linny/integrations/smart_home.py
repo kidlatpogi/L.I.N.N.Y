@@ -65,6 +65,8 @@ class SmartDeviceManager:
         self._event_bus = EventBus()
         self._connected = False
         self._is_connecting = False
+        self._pending_brightness: Optional[int] = None
+        self._is_setting_brightness: bool = False
 
         # Dedicated persistent event loop running in a daemon thread
         self._loop = asyncio.new_event_loop()
@@ -307,27 +309,45 @@ class SmartDeviceManager:
         return True
 
     def set_brightness(self, level: int) -> bool:
-        """Set brightness level 1-100% (Non-blocking)."""
+        """Set brightness level 1-100% with request coalescing to prevent hardware overload (Non-blocking)."""
         if not self._connected or not self._device:
             return False
 
         clamped = max(1, min(100, int(level)))
+        self._pending_brightness = clamped
 
-        async def _action(dev: Any):
-            from kasa import Module
-            light = dev.modules.get(Module.Light) if hasattr(dev, "modules") else None
-            if not light and hasattr(dev, "modules"):
-                light = dev.modules.get("Light")
+        if self._is_setting_brightness:
+            return True
 
-            if light and hasattr(light, "set_brightness"):
-                await light.set_brightness(clamped)
-            elif hasattr(dev, "set_brightness"):
-                await dev.set_brightness(clamped)
-            await dev.update()
-            logger.info(f"Smart light brightness set to {clamped}%")
-            self._event_bus.publish(EventType.SMART_HOME_UPDATE, {"brightness": clamped})
+        self._is_setting_brightness = True
 
-        self._execute_device_action(_action)
+        async def _action():
+            try:
+                while self._pending_brightness is not None:
+                    target = self._pending_brightness
+                    self._pending_brightness = None
+
+                    if not self._device:
+                        break
+
+                    from kasa import Module
+                    light = self._device.modules.get(Module.Light) if hasattr(self._device, "modules") else None
+                    if not light and hasattr(self._device, "modules"):
+                        light = self._device.modules.get("Light")
+
+                    if light and hasattr(light, "set_brightness"):
+                        await light.set_brightness(target)
+                    elif hasattr(self._device, "set_brightness"):
+                        await self._device.set_brightness(target)
+                    await self._device.update()
+                    logger.info(f"Smart light brightness set to {target}%")
+                    self._event_bus.publish(EventType.SMART_HOME_UPDATE, {"brightness": target})
+            except Exception as e:
+                logger.warning(f"Failed to set brightness: {e}")
+            finally:
+                self._is_setting_brightness = False
+
+        asyncio.run_coroutine_threadsafe(_action(), self._loop)
         return True
 
     def set_color_temp(self, temp_kelvin: int) -> bool:

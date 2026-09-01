@@ -1,142 +1,218 @@
 # 🌟 L.I.N.N.Y. (v1.1.0)
 ### *Loyal Intelligent Neural Network for You*
+> **Desktop AI Voice Assistant & Smart IoT Automation Suite for Windows**
 
-[![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![UI](https://img.shields.io/badge/GUI-CustomTkinter-blue?style=for-the-badge)](https://github.com/TomSchimansky/CustomTkinter)
-[![TTS](https://img.shields.io/badge/TTS-Microsoft%20Edge%20Neural-0078D7?style=for-the-badge&logo=microsoft-edge&logoColor=white)](https://github.com/rany2/edge-tts)
-[![AI](https://img.shields.io/badge/AI%20Brain-Groq%20%7C%20Gemini%20%7C%20Perplexity-orange?style=for-the-badge)](https://groq.com)
-[![Smart Home](https://img.shields.io/badge/IoT-Tapo%20%26%20Kasa-00B2A9?style=for-the-badge)](https://github.com/python-kasa/python-kasa)
-[![Tests](https://img.shields.io/badge/Tests-PyTest%20Passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](https://docs.pytest.org/)
-
----
-
-## 📖 Overview
-
-**L.I.N.N.Y.** is an enterprise-grade, modular desktop voice assistant and personal companion designed for Windows. Engineered with a decoupled domain architecture, Linny provides natural human-like voice conversations, smart home lighting control, application automation, daily calendar summaries, weather forecasts, and multi-provider AI reasoning.
+[![Python Version](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![GUI Framework](https://img.shields.io/badge/GUI-CustomTkinter%20Dark%20Mode-blue?style=for-the-badge)](https://github.com/TomSchimansky/CustomTkinter)
+[![Neural TTS](https://img.shields.io/badge/TTS-Microsoft%20Edge%20Neural-0078D7?style=for-the-badge&logo=microsoft-edge&logoColor=white)](https://github.com/rany2/edge-tts)
+[![AI Orchestration](https://img.shields.io/badge/AI%20Brain-Groq%20%7C%20Gemini%20%7C%20Perplexity-FF6F00?style=for-the-badge)](https://groq.com)
+[![IoT Protocol](https://img.shields.io/badge/IoT-Tapo%20KLAP%20%26%20Kasa-00B2A9?style=for-the-badge)](https://github.com/python-kasa/python-kasa)
+[![Test Suite](https://img.shields.io/badge/Tests-PyTest%2019%2F19%20Passing-brightgreen?style=for-the-badge&logo=pytest&logoColor=white)](https://docs.pytest.org/)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://microsoft.com)
 
 ---
 
-## 🏛️ Architectural Highlights
+## 📖 Executive Summary & What is LINNY?
+
+**L.I.N.N.Y.** (*Loyal Intelligent Neural Network for You*) is an enterprise-grade, high-performance desktop voice assistant and intelligent ambient computing system engineered in Python. Designed with a clean domain-driven architecture, Linny unifies real-time speech recognition, lifelike neural voice synthesis, multi-model AI reasoning, local smart home IoT automation, Google Calendar scheduling, high-precision weather forecasts, and native Windows OS automation into a sleek, 0ms-latency charcoal dark mode dashboard.
+
+---
+
+## 📸 Interface & Visual Showcase
+
+| Overview Dashboard | AI Studio Multi-Model Playground |
+| :---: | :---: |
+| ![Overview](assets/screenshots/overview.png) | ![AI Studio](assets/screenshots/ai_studio.png) |
+| *0ms reactive dashboard with greeting, weather, and instant action triggers.* | *Real-time LLM sandbox with temperature controls and cascading fallback.* |
+
+| Smart Lighting IoT Controls | Application Shortcuts & Launcher |
+| :---: | :---: |
+| ![Smart Lighting](assets/screenshots/smart_lighting.png) | ![App Shortcuts](assets/screenshots/app_shortcuts.png) |
+| *Hardware-debounced Tapo/Kasa KLAP controller with real-time diagnostics.* | *Custom executable, URL, and shell alias registry with zero-lag launching.* |
+
+| Calendar Agenda | Preferences & System Config |
+| :---: | :---: |
+| ![Calendar](assets/screenshots/calendar.png) | ![Preferences](assets/screenshots/preferences.png) |
+| *Google Calendar OAuth2 integration with agenda summaries.* | *Centralized settings, neural voice picker, and coordinate geocoding.* |
+
+| Live Diagnostic Console |
+| :---: |
+| ![Live Console](assets/screenshots/live_console.png) |
+| *Thread-safe circular memory logging stream for real-time auditability.* |
+
+---
+
+## 🚀 Key Technical Features
+
+### 🎙️ 1. Intelligent Speech Recognition & Natural Phrase Capture
+- **Non-blocking Audio Streaming**: Built on `speech_recognition` with adaptive ambient noise calibration.
+- **Natural Voice Parsing**: Configured with extended phrase duration (`phrase_time_limit=12.0s`) and tuned thresholds (`pause_threshold=1.2s`, `non_speaking_duration=0.8s`) to capture multi-word commands without premature cutoff.
+- **Direct Intent Routing**: Seamlessly recognizes both wake-word-prefixed commands (*"Hey Linny open Brave"*, *"Hey open Spotify"*) and direct action commands (*"Weather"*, *"Current time"*, *"Lights on"*, *"Pause music"*).
+
+### 🔊 2. Dual-Engine Neural Voice Synthesis (TTS)
+- **Primary Engine**: Microsoft Edge Neural TTS (`edge-tts`) using high-definition neural voices (`en-PH-RosaNeural`, `en-US-JennyNeural`, etc.) streamed asynchronously to an in-memory `pygame.mixer` buffer.
+- **Local Offline Fallback**: Windows SAPI5 (`pyttsx3`) ensures voice functionality even when offline.
+- **Microphone Echo Cancellation Lock**: Automatically mutes speech listening during TTS playback to prevent self-triggering loops.
+
+### 💡 3. High-Performance Smart Home IoT Automation
+- **Persistent Asyncio Event Loop**: Kasa and Tapo smart device operations run on a dedicated daemon event loop thread (`SmartHomeEventLoop`), eliminating Tkinter UI thread freezes.
+- **Tapo Protocol & Device Account Compatibility**: Full support for Tapo L535E/L530E multicolor bulbs, P100/P110 smart plugs, and legacy Kasa devices over local HTTP Port 80 KLAP.
+- **Hardware-Debounced Slider & Request Coalescing**: Sliders feature a 200ms UI debounce combined with asynchronous backend request coalescing, preventing smart bulb hardware from being overwhelmed during rapid slider adjustments.
+
+### 🧠 4. Cascading Multi-Provider AI Brain
+- **Failover Routing**: Queries cascade seamlessly across **Groq** (`llama-3.3-70b-versatile`), **Google Gemini** (`gemini-2.0-flash`), and **Perplexity AI** (`sonar-pro`).
+- **Autonomous Search Intent Detection**: Automatically queries live web results when questions involve current events or sports scores.
+- **Offline Fallback**: Responds with structured local intelligence if network connectivity is unavailable.
+
+### ⚡ 5. Native Windows Automation & System Power
+- **Smart App Launcher**: 3-tier resolver supporting web URLs, direct binaries via `os.startfile`, and complex CLI commands via detached `subprocess.Popen`.
+- **Media Controls**: PyAutoGUI-driven multimedia keys for play, pause, track skipping, and volume adjustment.
+- **Workstation Security**: High-speed Windows API lock (`ctypes.windll.user32.LockWorkStation`), full-resolution screenshot capture, and GeForce/Xbox Instant Replay clipping.
+
+---
+
+## 🏛️ System Architecture
 
 ```
 Linny/
-├── linny/
-│   ├── audio/                  # Audio input (STT) and output (TTS)
-│   │   ├── tts.py              # Dual-engine TTS (Edge Neural + Pyttsx3 SAPI5 fallback)
-│   │   └── stt.py              # Background Google Speech Recognition with echo lock
-│   ├── core/                   # Domain core
-│   │   ├── assistant.py        # Master intent router & command orchestrator
-│   │   ├── config.py           # Strongly typed configuration schema with atomic JSON writes
-│   │   ├── events.py           # Thread-safe pub/sub Event Bus
-│   │   └── logger.py           # Centralized structured logger & UI memory buffer
-│   ├── integrations/           # Third-party services & hardware
-│   │   ├── ai_brain.py         # Cascading LLM brain (Groq -> Gemini -> Perplexity)
-│   │   ├── calendar.py         # Google Calendar OAuth2 client with smart day filtering
-│   │   ├── smart_home.py       # Modern python-kasa async Tapo L530E controller
+├── assets/                     # Portfolio media & visual assets
+│   └── screenshots/            # High-resolution UI screenshots
+├── linny/                      # Core application package
+│   ├── audio/                  # Audio input & output subsystems
+│   │   ├── stt.py              # SpeechListener with adaptive thresholds & echo lock
+│   │   └── tts.py              # Asynchronous Edge Neural TTS + SAPI5 fallback
+│   ├── core/                   # Domain core & orchestration
+│   │   ├── assistant.py        # Master intent router & voice controller
+│   │   ├── config.py           # Strongly typed LinnyConfig with atomic JSON persistence
+│   │   ├── events.py           # Thread-safe pub/sub EventBus
+│   │   └── logger.py           # Structured rotating logger & UI memory buffer
+│   ├── integrations/           # External API & hardware adapters
+│   │   ├── ai_brain.py         # Cascading LLM client (Groq -> Gemini -> Perplexity)
+│   │   ├── calendar.py         # Google Calendar OAuth2 client
+│   │   ├── smart_home.py       # Non-blocking Tapo/Kasa KLAP device manager
 │   │   └── weather.py          # Open-Meteo weather client with TTL caching
-│   ├── system/                 # Windows OS management
-│   │   ├── launcher.py         # 3-case smart application, URL, and game launcher
-│   │   ├── power.py            # Power states, lock, screenshot, and media hotkeys
-│   │   └── startup.py          # Windows boot registry and process priority manager
-│   ├── ui/                     # Presentation layer
-│   │   ├── app.py              # CustomTkinter glassmorphism dashboard
-│   │   ├── tray.py             # System tray companion with dynamic state colors
-│   │   └── views/              # Modular tabbed views (Overview, AI, Smart Home, Aliases, etc.)
-│   └── main.py                 # Application CLI and lifecycle entry point
-├── tests/                      # Automated test suite (PyTest)
-├── scripts/                    # Windows automation scripts
+│   ├── system/                 # Windows OS operations
+│   │   ├── launcher.py         # Intelligent process, game, and URL launcher
+│   │   ├── power.py            # Power states, lock workstation, screenshot & media keys
+│   │   └── startup.py          # Windows Registry auto-start & process priority
+│   └── ui/                     # Presentation layer
+│       ├── app.py              # CustomTkinter glassmorphism master window (0ms tab switching)
+│       ├── tray.py             # System tray companion with dynamic state colors
+│       └── views/              # Modular charcoal-themed view components
+│           ├── ai_view.py          # AI Studio LLM playground
+│           ├── calendar_view.py    # Google Calendar schedule viewer
+│           ├── logs_view.py        # Live console diagnostic viewer
+│           ├── overview_view.py    # Master overview dashboard
+│           ├── settings_view.py    # System preferences & geocoding
+│           ├── shortcuts_view.py   # App & URL shortcuts manager
+│           └── smarthome_view.py   # Smart lighting scanner & controls
+├── scripts/                    # Management scripts
+│   ├── enable_startup.bat      # Enable auto-start on Windows boot
+│   ├── disable_startup.bat     # Remove auto-start from registry
+│   └── run_linny.bat           # One-click application launcher
+├── tests/                      # Automated test suite (19 unit tests)
+│   ├── test_brain.py           # AI brain routing tests
+│   ├── test_commands.py        # Voice intent parsing tests
+│   ├── test_config.py          # Config serialization tests
+│   ├── test_launcher.py        # App launcher tests
+│   ├── test_smart_home.py      # Smart device manager tests
+│   ├── test_tts.py             # Voice engine synthesis tests
+│   └── test_weather.py         # Weather geocoding tests
 ├── linny_config_default.json   # Base configuration template
-└── requirements.txt            # Dependency manifest
+└── requirements.txt            # Project dependencies
 ```
 
 ---
 
-## 🚀 Key Features
+## 🛠️ Installation & Getting Started
 
-### 1. 🎙️ Dual-Engine Speech System
-- **Microsoft Edge Neural Voice**: Streams hyper-realistic neural voices (`en-PH-RosaNeural`, `en-US-JennyNeural`, `fil-PH-BlessicaNeural`, etc.) via in-memory Pygame playback.
-- **Offline SAPI5 Fallback**: Automatically and seamlessly falls back to offline `pyttsx3` speech synthesis if internet connection drops.
-- **Instant Interruption**: Hardware hotkeys and speech recognition auto-mute immediately interrupt output with zero audio file lock collisions.
+### Prerequisites
+- **Operating System**: Windows 10 or Windows 11 (64-bit)
+- **Python**: Version `3.10`, `3.11`, `3.12`, or `3.13`
+- **Microphone & Speakers / Headset**
 
-### 2. 🧠 Cascading Multi-Provider AI Brain
-Linny intelligently routes questions based on speed, context, and search intent:
-1. **Perplexity Sonar**: Triggered automatically for real-time web search, financial quotes, latest news, and fact-checking.
-2. **Groq (Llama 3.3 70B)**: Lightning-fast sub-second responses for natural voice dialogue.
-3. **Google Gemini (Gemini 2.0 Flash)**: High-context secondary reasoning for complex prompts.
-4. **Local Fallback Heuristics**: Handles time, date, math, and system checks completely offline.
-
-### 3. 💡 Smart Home Lighting (Tapo L530E & Kasa)
-- Asynchronous non-blocking control for Tapo and TP-Link Kasa smart bulbs and plugs.
-- **Lighting Presets**: `Focus` (6000K, 100%), `Movie` (2500K, 30%), `Gaming` (Purple HSV), `Night` (2200K, 10%), `Relax` (Warm 50%).
-- **Color & Brightness**: Full HSV color wheel support and percentage-based brightness adjustments.
-- **Error Resilience**: Operates gracefully without blocking UI or voice loops when devices are offline.
-
-### 4. 💻 Modernized CustomTkinter Dashboard
-- Sleek dark-mode interface with real-time status indicators (Listening, Speaking, Processing, Muted).
-- In-app interactive **App Aliases Table**: Add, browse executables, launch, and delete voice shortcuts directly without opening raw config files.
-- Live scrolling activity log and console monitor.
-- System Tray minimization with colored status rings (Green = Ready, Blue = Speaking, Red = Muted).
-
----
-
-## 🗣️ Voice Command Cheatsheet
-
-| Category | Voice Trigger Examples |
-| :--- | :--- |
-| **Wake Words** | `"Hey Linny"`, `"Linny"`, `"Okay Linny"`, `"Hi Linny"` |
-| **Smart Lights** | `"Turn on the lights"`, `"Lights off"`, `"Buksan ang ilaw"`, `"Patayin ang ilaw"`, `"Set lights to 50%"`, `"Focus mode"`, `"Gaming mode"`, `"Change light color to blue"` |
-| **App Launcher** | `"Open VS Code"`, `"Launch Spotify"`, `"Open Valorant"`, `"Launch Browser"`, `"Start Discord"` |
-| **AI Assistant** | `"Who was Ada Lovelace?"`, `"What is quantum computing?"`, `"Search latest tech news"` |
-| **Schedule & Agenda** | `"What is my schedule today?"`, `"What do I have tomorrow?"`, `"Calendar agenda"` |
-| **Weather** | `"What's the weather?"`, `"Is it going to rain today?"`, `"Anong panahon ngayon?"` |
-| **System & Media** | `"Lock computer"`, `"Shutdown PC"`, `"Take a screenshot"`, `"Clip that"`, `"Next song"`, `"Volume up"`, `"Pause music"` |
-| **Timer** | `"Set timer for 15 minutes"`, `"5 minute pomodoro"` |
-| **YouTube** | `"Play Bohemian Rhapsody on YouTube"` |
-| **Mute / Sleep** | `"Stop listening"`, `"Go to sleep"` |
-
----
-
-## 🛠️ Installation & Setup
-
-### 1. Prerequisites
-- **Python 3.10 to 3.13** installed on Windows.
-- Working Microphone & Speaker/Headset.
-
-### 2. Clone and Install Dependencies
-```powershell
+### 1. Clone Repository
+```bash
 git clone https://github.com/kidlatpogi/L.I.N.N.Y.git
-cd Linny
+cd L.I.N.N.Y
+```
+
+### 2. Create & Activate Virtual Environment
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
+
+### 3. Install Dependencies
+```powershell
 pip install -r requirements.txt
 ```
 
-### 3. Launch Linny
+### 4. Launch Linny
 ```powershell
-# Launch Desktop GUI Dashboard
-python -m linny.main
-
-# Or run via batch script
 .\scripts\run_linny.bat
+# Or directly via Python:
+python -m linny.main
 ```
-
-### 4. Optional: Windows Startup Configuration
-To enable Linny to greet you on Windows boot:
-```powershell
-.\scripts\enable_startup.bat
-```
-*(Or toggle "Start on Windows Boot" inside the Settings tab in the dashboard)*
 
 ---
 
-## 🧪 Automated Testing
+## 🗣️ Supported Voice Commands
 
-Linny includes a comprehensive test suite covering configuration, AI search intent heuristics, smart device controllers, and audio engines:
+| Intent Category | Example Voice Commands | System Action |
+| :--- | :--- | :--- |
+| **App Launching** | `"Hey open Brave"`, `"Open Spotify"`, `"Launch Discord"`, `"Open VS Code"`, `"Open Valorant"` | Launches executable, game, or web application |
+| **Weather** | `"What is the weather"`, `"Weather forecast"`, `"Tell me the weather"`, `"Temperature"` | Announces high-precision weather conditions & temperature |
+| **Time & Date** | `"What time is it"`, `"Current time"`, `"What is the date today"`, `"Time check"` | Announces local time/date in configured timezone |
+| **Schedule** | `"What's on my schedule"`, `"Calendar agenda"`, `"What do I have today"` | Synthesizes upcoming Google Calendar appointments |
+| **Smart Lights** | `"Turn on the lights"`, `"Lights off"`, `"Set brightness to 50%"`, `"Color blue"`, `"Focus mode"` | Sends non-blocking KLAP commands to Tapo/Kasa devices |
+| **Media Playback** | `"Pause music"`, `"Resume"`, `"Next song"`, `"Previous track"`, `"Volume up"`, `"Mute audio"` | Controls Windows media playback keys |
+| **YouTube** | `"Play [song/artist] on YouTube"` | Searches YouTube and launches playback in browser |
+| **Screen Capture** | `"Take a screenshot"`, `"Clip that"` | Saves full-resolution PNG or triggers GeForce replay clip |
+| **Timers** | `"Set a timer for 10 minutes"` | Starts background timer with voice alarm upon completion |
+| **System Power** | `"Lock PC"`, `"Shutdown PC"`, `"Restart PC"`, `"Sleep PC"` | Locks workstation, restarts, or shuts down system |
+| **AI Brain** | Any conversational question (e.g., *"Who was Ada Lovelace?"*, *"Tell me a joke"*) | Routes query to Groq Llama 3.3 / Gemini / Perplexity |
+
+---
+
+## 🧪 Automated Testing & Verification
+
+Linny includes a comprehensive test suite covering all domains, intent parsers, and external integrations:
 
 ```powershell
 python -m pytest tests/ -v
 ```
 
+```
+============================= test session starts =============================
+platform win32 -- Python 3.13.13, pytest-9.1.1
+collected 19 items
+
+tests/test_brain.py::test_search_intent_detection PASSED                 [  5%]
+tests/test_brain.py::test_offline_fallback PASSED                        [ 10%]
+tests/test_commands.py::test_wake_word_extraction PASSED                 [ 15%]
+tests/test_commands.py::test_app_launch_intent PASSED                    [ 21%]
+tests/test_commands.py::test_weather_intent PASSED                       [ 26%]
+tests/test_commands.py::test_time_and_date_intent PASSED                 [ 31%]
+tests/test_commands.py::test_schedule_intent PASSED                      [ 36%]
+tests/test_commands.py::test_smart_lights_intent PASSED                  [ 42%]
+tests/test_commands.py::test_media_controls_intent PASSED                [ 47%]
+tests/test_config.py::test_default_config_fields PASSED                  [ 52%]
+tests/test_config.py::test_dict_serialization PASSED                     [ 57%]
+tests/test_launcher.py::test_alias_resolution PASSED                     [ 63%]
+tests/test_launcher.py::test_empty_launch PASSED                         [ 68%]
+tests/test_smart_home.py::test_color_presets_coverage PASSED             [ 73%]
+tests/test_smart_home.py::test_offline_device_graceful PASSED            [ 78%]
+tests/test_tts.py::test_voice_engine_init PASSED                         [ 84%]
+tests/test_tts.py::test_voice_engine_stop PASSED                         [ 89%]
+tests/test_weather.py::test_weather_fetch_structure PASSED               [ 94%]
+tests/test_weather.py::test_weather_summary_text PASSED                  [100%]
+
+======================= 19 passed, 3 warnings in 6.73s ========================
+```
+
 ---
 
-## 📜 License
+## 📄 License & Attribution
 
-Distributed under the MIT License. Developed with ❤️ by **Zeus**.
+Designed and developed by **kidlatpogi** as an open-source, portfolio-grade intelligent voice companion for Windows. Distributed under the MIT License.

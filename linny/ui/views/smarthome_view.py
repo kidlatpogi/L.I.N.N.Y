@@ -43,6 +43,7 @@ class SmartHomeView(ctk.CTkScrollableFrame):
         super().__init__(parent, fg_color="transparent")
         self.assistant = assistant
         self.discovered_devices: List[Dict[str, Any]] = []
+        self._brightness_timer: Optional[str] = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -389,4 +390,15 @@ class SmartHomeView(ctk.CTkScrollableFrame):
     def _on_slider_change(self, val: float) -> None:
         int_val = int(val)
         self.brightness_val_label.configure(text=f"{int_val}%")
-        self.assistant.smart_home.set_brightness(int_val)
+
+        if self._brightness_timer is not None:
+            try:
+                self.after_cancel(self._brightness_timer)
+            except Exception:
+                pass
+
+        def _send():
+            self.assistant.smart_home.set_brightness(int_val)
+            self._brightness_timer = None
+
+        self._brightness_timer = self.after(200, _send)
