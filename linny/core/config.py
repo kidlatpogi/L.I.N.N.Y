@@ -25,7 +25,7 @@ DEFAULT_CONFIG_FILE = WORKSPACE_ROOT / "linny_config_default.json"
 @dataclass
 class LinnyConfig:
     # User Profile & Localization
-    user_name: str = "Zeus"
+    user_name: str = "User"
     language: str = "English"
     timezone: str = "Asia/Manila"
 
@@ -43,9 +43,9 @@ class LinnyConfig:
     gemini_api_key: str = ""
     perplexity_api_key: str = ""
 
-    # Smart Home (Kasa / Tapo L530E)
+    # Smart Home (Kasa / Tapo L530E/L535E)
     smart_bulb_enabled: bool = True
-    smart_bulb_ip: str = "192.168.18.12"
+    smart_bulb_ip: str = "192.168.1.100"
     smart_bulb_family: str = "SMART.TAPOBULB"
     tapo_email: str = ""
     tapo_password: str = ""
@@ -55,9 +55,10 @@ class LinnyConfig:
     lock_on_startup: bool = False
     app_aliases: Dict[str, str] = field(default_factory=lambda: {
         "code": "code",
-        "vs code": "C:\\Users\\Zeus\\AppData\\Local\\Programs\\Microsoft VS Code\\code.exe",
-        "browser": "C:\\Users\\Zeus\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
-        "brave": "C:\\Users\\Zeus\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+        "vs code": "code",
+        "browser": "brave",
+        "brave": "brave",
+        "chrome": "chrome",
         "spotify": "spotify:",
         "apple music": "https://music.apple.com/us/new",
         "calculator": "calc",
@@ -68,17 +69,13 @@ class LinnyConfig:
         "word": "winword",
         "teams": "msteams:",
         "microsoft teams": "msteams:",
-        "discord": "C:\\Users\\Zeus\\AppData\\Local\\Discord\\Update.exe --processStart Discord.exe",
-        "antigravity": "C:\\Users\\Zeus\\AppData\\Local\\Programs\\Antigravity\\Antigravity.exe",
-        "valorant": "E:\\GAMES\\Riot Games\\Riot Client\\RiotClientServices.exe --launch-product=valorant --launch-patchline=live",
-        "league": "E:\\GAMES\\Riot Games\\Riot Client\\RiotClientServices.exe --launch-product=league_of_legends --launch-patchline=live",
-        "lol": "E:\\GAMES\\Riot Games\\Riot Client\\RiotClientServices.exe --launch-product=league_of_legends --launch-patchline=live",
+        "discord": "discord:",
     })
 
-    # Weather Location
-    weather_city: str = "Silang, Cavite"
-    weather_latitude: float = 14.2167
-    weather_longitude: float = 120.9833
+    # Weather
+    weather_latitude: float = 14.5995
+    weather_longitude: float = 120.9842
+    weather_city: str = "Manila"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

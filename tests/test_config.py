@@ -5,7 +5,7 @@ from linny.core.config import LinnyConfig
 
 def test_default_config_fields():
     config = LinnyConfig()
-    assert config.user_name == "Zeus"
+    assert config.user_name == "User"
     assert config.language == "English"
     assert config.timezone == "Asia/Manila"
     assert "code" in config.app_aliases

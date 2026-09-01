@@ -1,5 +1,5 @@
 {
-    "user_name": "Zeus",
+    "user_name": "User",
     "language": "English",
     "timezone": "Asia/Manila",
     "voice_en": "en-PH-RosaNeural",
@@ -13,16 +13,19 @@
     "perplexity_api_key": "",
     "smart_bulb_enabled": true,
     "smart_bulb_ip": "192.168.1.100",
+    "smart_bulb_family": "SMART.TAPOBULB",
     "tapo_email": "",
     "tapo_password": "",
     "lock_on_startup": false,
-    "weather_latitude": 14.2167,
-    "weather_longitude": 120.9833,
+    "weather_city": "Manila",
+    "weather_latitude": 14.5995,
+    "weather_longitude": 120.9842,
     "app_aliases": {
         "code": "code",
-        "vs code": "C:\\Users\\Zeus\\AppData\\Local\\Programs\\Microsoft VS Code\\code.exe",
-        "browser": "C:\\Users\\Zeus\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
-        "brave": "C:\\Users\\Zeus\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+        "vs code": "code",
+        "browser": "brave",
+        "brave": "brave",
+        "chrome": "chrome",
         "spotify": "spotify:",
         "apple music": "https://music.apple.com/us/new",
         "calculator": "calc",
@@ -33,10 +36,6 @@
         "word": "winword",
         "teams": "msteams:",
         "microsoft teams": "msteams:",
-        "discord": "C:\\Users\\Zeus\\AppData\\Local\\Discord\\Update.exe --processStart Discord.exe",
-        "antigravity": "C:\\Users\\Zeus\\AppData\\Local\\Programs\\Antigravity\\Antigravity.exe",
-        "valorant": "E:\\GAMES\\Riot Games\\Riot Client\\RiotClientServices.exe --launch-product=valorant --launch-patchline=live",
-        "league": "E:\\GAMES\\Riot Games\\Riot Client\\RiotClientServices.exe --launch-product=league_of_legends --launch-patchline=live",
-        "lol": "E:\\GAMES\\Riot Games\\Riot Client\\RiotClientServices.exe --launch-product=league_of_legends --launch-patchline=live"
+        "discord": "discord:"
     }
 }
