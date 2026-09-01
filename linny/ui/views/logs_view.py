@@ -1,5 +1,13 @@
 """
-Real-time Activity and Recognition Logs View.
+Real-time Activity and Recognition Logs Console View.
+Palette:
+- Background: #121212 (charcoal black)
+- Surface/Cards: #1A1A1A
+- Primary Text: #E0E0E0 (light gray)
+- Secondary Text: #B0B0B0 (medium gray)
+- Borders/Dividers: #444444 (dark gray)
+- Accent: #888888 (soft gray)
+- Zero emojis inside view.
 """
 
 from __future__ import annotations
@@ -12,6 +20,12 @@ from ...core.logger import get_memory_log_handler
 
 if TYPE_CHECKING:
     from ...core.assistant import LinnyAssistant
+
+COLOR_SURFACE = "#1A1A1A"
+COLOR_TEXT_PRIMARY = "#E0E0E0"
+COLOR_BORDER = "#444444"
+COLOR_BTN_BG = "#2A2A2A"
+COLOR_BTN_HOVER = "#383838"
 
 
 class LogsView(ctk.CTkFrame):
@@ -26,12 +40,13 @@ class LogsView(ctk.CTkFrame):
 
     def _build_ui(self) -> None:
         header_row = ctk.CTkFrame(self, fg_color="transparent")
-        header_row.pack(fill="x", padx=20, pady=(15, 10))
+        header_row.pack(fill="x", padx=28, pady=(24, 10))
 
         ctk.CTkLabel(
             header_row,
-            text="📜 Live Activity & Console Logs",
-            font=ctk.CTkFont(size=22, weight="bold"),
+            text="Live Activity and Console Logs",
+            font=ctk.CTkFont(size=24, weight="bold"),
+            text_color=COLOR_TEXT_PRIMARY,
         ).pack(side="left")
 
         clear_btn = ctk.CTkButton(
@@ -40,20 +55,27 @@ class LogsView(ctk.CTkFrame):
             command=self._on_clear,
             width=110,
             height=32,
-            fg_color="#334155",
-            hover_color="#475569",
-            font=ctk.CTkFont(size=12),
+            fg_color=COLOR_BTN_BG,
+            hover_color=COLOR_BTN_HOVER,
+            text_color=COLOR_TEXT_PRIMARY,
+            border_color=COLOR_BORDER,
+            border_width=1,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            corner_radius=6,
         )
         clear_btn.pack(side="right")
 
+        console_card = ctk.CTkFrame(self, fg_color=COLOR_SURFACE, border_color=COLOR_BORDER, border_width=1, corner_radius=12)
+        console_card.pack(fill="both", expand=True, padx=28, pady=(0, 24))
+
         self.log_box = ctk.CTkTextbox(
-            self,
+            console_card,
             font=ctk.CTkFont(family="Consolas", size=12),
-            fg_color="#0f172a",
-            text_color="#38bdf8",
-            corner_radius=12,
+            fg_color="#101010",
+            text_color="#D0D0D0",
+            corner_radius=8,
         )
-        self.log_box.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        self.log_box.pack(fill="both", expand=True, padx=12, pady=12)
 
         # Populate initial logs
         initial_logs = self.log_handler.get_recent_logs()

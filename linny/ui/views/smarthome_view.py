@@ -1,146 +1,260 @@
 """
-Smart Home Management View for Tapo L530E and TP-Link Kasa Devices.
-Supports device configuration, credentials, status diagnostics, and interactive controls.
+Smart Home Management View for Tapo and TP-Link Kasa Devices.
+Palette:
+- Background: #121212 (charcoal black)
+- Surface/Cards: #1A1A1A
+- Primary Text: #E0E0E0 (light gray)
+- Secondary Text: #B0B0B0 (medium gray)
+- Borders/Dividers: #444444 (dark gray)
+- Accent: #888888 (soft gray)
+- Zero emojis inside view.
 """
 
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Dict, List
 
 import customtkinter as ctk
 
 from ...core.config import save_config
 from ...core.logger import get_logger
+from ...integrations.smart_home import DEVICE_FAMILIES
 
 if TYPE_CHECKING:
     from ...core.assistant import LinnyAssistant
 
 logger = get_logger("ui.smarthome")
 
+COLOR_SURFACE = "#1A1A1A"
+COLOR_SURFACE_ALT = "#242424"
+COLOR_TEXT_PRIMARY = "#E0E0E0"
+COLOR_TEXT_SECONDARY = "#B0B0B0"
+COLOR_BORDER = "#444444"
+COLOR_ACCENT = "#888888"
+COLOR_BTN_BG = "#2A2A2A"
+COLOR_BTN_HOVER = "#383838"
+
 
 class SmartHomeView(ctk.CTkScrollableFrame):
-    """Smart home configuration and live controls view."""
+    """Smart home device picker and live lighting dashboard."""
 
     def __init__(self, parent: Any, assistant: LinnyAssistant) -> None:
         super().__init__(parent, fg_color="transparent")
         self.assistant = assistant
+        self.discovered_devices: List[Dict[str, Any]] = []
         self._build_ui()
 
     def _build_ui(self) -> None:
-        # Header
+        # Title Header
         ctk.CTkLabel(
             self,
-            text="💡 Smart Lighting (Tapo L530E & Kasa)",
-            font=ctk.CTkFont(size=22, weight="bold"),
-        ).pack(anchor="w", padx=20, pady=(15, 5))
+            text="Smart Lighting (Tapo and Kasa)",
+            font=ctk.CTkFont(size=24, weight="bold"),
+            text_color=COLOR_TEXT_PRIMARY,
+        ).pack(anchor="w", padx=28, pady=(24, 4))
 
         ctk.CTkLabel(
             self,
-            text="Control smart bulbs and plugs with high-performance local network automation.",
+            text="Discover, configure, and control Tapo and TP-Link Kasa smart devices.",
             font=ctk.CTkFont(size=13),
-            text_color="#94a3b8",
-        ).pack(anchor="w", padx=20, pady=(0, 20))
+            text_color=COLOR_TEXT_SECONDARY,
+        ).pack(anchor="w", padx=28, pady=(0, 16))
 
-        # Device Settings Card
-        config_card = ctk.CTkFrame(self, fg_color="#1e293b", corner_radius=12)
-        config_card.pack(fill="x", padx=20, pady=(0, 20))
+        # Device Setup & Network Scanner Card
+        card = ctk.CTkFrame(self, fg_color=COLOR_SURFACE, border_color=COLOR_BORDER, border_width=1, corner_radius=12)
+        card.pack(fill="x", padx=28, pady=(0, 16))
 
-        config_inner = ctk.CTkFrame(config_card, fg_color="transparent")
-        config_inner.pack(fill="x", padx=20, pady=15)
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.pack(fill="x", padx=20, pady=18)
+
+        # Scanner Header Row
+        scan_row = ctk.CTkFrame(inner, fg_color="transparent")
+        scan_row.pack(fill="x", pady=(0, 12))
 
         ctk.CTkLabel(
-            config_inner,
-            text="Device Network & Authentication",
+            scan_row,
+            text="Device Discovery and Network Setup",
             font=ctk.CTkFont(size=14, weight="bold"),
-        ).pack(anchor="w", pady=(0, 10))
+            text_color=COLOR_TEXT_PRIMARY,
+        ).pack(side="left")
 
-        # Bulb IP
-        ip_row = ctk.CTkFrame(config_inner, fg_color="transparent")
+        self.scan_btn = ctk.CTkButton(
+            scan_row,
+            text="Scan Network",
+            command=self._on_scan_network,
+            width=120,
+            height=32,
+            fg_color=COLOR_BTN_BG,
+            hover_color=COLOR_BTN_HOVER,
+            text_color=COLOR_TEXT_PRIMARY,
+            border_color=COLOR_BORDER,
+            border_width=1,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            corner_radius=6,
+        )
+        self.scan_btn.pack(side="right")
+
+        # Pick Device Dropdown
+        pick_row = ctk.CTkFrame(inner, fg_color="transparent")
+        pick_row.pack(fill="x", pady=4)
+        ctk.CTkLabel(pick_row, text="Select Device:", width=160, anchor="w", font=ctk.CTkFont(size=12, weight="bold"), text_color=COLOR_TEXT_SECONDARY).pack(side="left")
+
+        self.device_picker = ctk.CTkOptionMenu(
+            pick_row,
+            values=[f"{self.assistant.config.smart_bulb_ip} (Configured Target)"],
+            command=self._on_device_picked,
+            height=34,
+            fg_color=COLOR_SURFACE_ALT,
+            text_color=COLOR_TEXT_PRIMARY,
+            button_color=COLOR_BORDER,
+            button_hover_color="#555555",
+            dropdown_text_color=COLOR_TEXT_PRIMARY,
+            dropdown_fg_color=COLOR_SURFACE_ALT,
+        )
+        self.device_picker.pack(side="left", fill="x", expand=True)
+
+        # Manual IP Entry
+        ip_row = ctk.CTkFrame(inner, fg_color="transparent")
         ip_row.pack(fill="x", pady=4)
-        ctk.CTkLabel(ip_row, text="Smart Bulb IP Address:", width=170, anchor="w").pack(side="left")
-        self.ip_entry = ctk.CTkEntry(ip_row, placeholder_text="192.168.1.100", font=ctk.CTkFont(size=12))
+        ctk.CTkLabel(ip_row, text="Device IP Address:", width=160, anchor="w", text_color=COLOR_TEXT_SECONDARY).pack(side="left")
+        self.ip_entry = ctk.CTkEntry(ip_row, placeholder_text="192.168.18.12", height=34, font=ctk.CTkFont(size=12), border_color=COLOR_BORDER, fg_color=COLOR_SURFACE_ALT, text_color=COLOR_TEXT_PRIMARY)
         self.ip_entry.insert(0, self.assistant.config.smart_bulb_ip)
         self.ip_entry.pack(side="left", fill="x", expand=True)
 
-        # Tapo Email
-        email_row = ctk.CTkFrame(config_inner, fg_color="transparent")
-        email_row.pack(fill="x", pady=4)
-        ctk.CTkLabel(email_row, text="Tapo Email (Username):", width=170, anchor="w").pack(side="left")
-        self.email_entry = ctk.CTkEntry(email_row, placeholder_text="your_email@example.com", font=ctk.CTkFont(size=12))
+        # Device Type / Family
+        family_row = ctk.CTkFrame(inner, fg_color="transparent")
+        family_row.pack(fill="x", pady=4)
+        ctk.CTkLabel(family_row, text="Device Family:", width=160, anchor="w", text_color=COLOR_TEXT_SECONDARY).pack(side="left")
+
+        family_names = list(DEVICE_FAMILIES.keys())
+        current_family_display = family_names[0]
+        for name, val in DEVICE_FAMILIES.items():
+            if val == self.assistant.config.smart_bulb_family:
+                current_family_display = name
+                break
+
+        self.family_var = ctk.StringVar(value=current_family_display)
+        self.family_menu = ctk.CTkOptionMenu(
+            family_row,
+            variable=self.family_var,
+            values=family_names,
+            height=34,
+            fg_color=COLOR_SURFACE_ALT,
+            text_color=COLOR_TEXT_PRIMARY,
+            button_color=COLOR_BORDER,
+            button_hover_color="#555555",
+            dropdown_text_color=COLOR_TEXT_PRIMARY,
+            dropdown_fg_color=COLOR_SURFACE_ALT,
+        )
+        self.family_menu.pack(side="left", fill="x", expand=True)
+
+        # Tapo Credentials
+        auth_row1 = ctk.CTkFrame(inner, fg_color="transparent")
+        auth_row1.pack(fill="x", pady=4)
+        ctk.CTkLabel(auth_row1, text="Tapo Email (TP-Link ID):", width=160, anchor="w", text_color=COLOR_TEXT_SECONDARY).pack(side="left")
+        self.email_entry = ctk.CTkEntry(auth_row1, placeholder_text="Email used in Tapo App", height=34, font=ctk.CTkFont(size=12), border_color=COLOR_BORDER, fg_color=COLOR_SURFACE_ALT, text_color=COLOR_TEXT_PRIMARY)
         self.email_entry.insert(0, self.assistant.config.tapo_email)
         self.email_entry.pack(side="left", fill="x", expand=True)
 
-        # Tapo Password
-        pass_row = ctk.CTkFrame(config_inner, fg_color="transparent")
-        pass_row.pack(fill="x", pady=4)
-        ctk.CTkLabel(pass_row, text="Tapo Cloud Password:", width=170, anchor="w").pack(side="left")
-        self.pass_entry = ctk.CTkEntry(pass_row, placeholder_text="Password", show="*", font=ctk.CTkFont(size=12))
+        auth_row2 = ctk.CTkFrame(inner, fg_color="transparent")
+        auth_row2.pack(fill="x", pady=4)
+        ctk.CTkLabel(auth_row2, text="Tapo Cloud Password:", width=160, anchor="w", text_color=COLOR_TEXT_SECONDARY).pack(side="left")
+        self.pass_entry = ctk.CTkEntry(auth_row2, placeholder_text="Password", show="*", height=34, font=ctk.CTkFont(size=12), border_color=COLOR_BORDER, fg_color=COLOR_SURFACE_ALT, text_color=COLOR_TEXT_PRIMARY)
         self.pass_entry.insert(0, self.assistant.config.tapo_password)
         self.pass_entry.pack(side="left", fill="x", expand=True)
 
-        # Save Button
-        save_row = ctk.CTkFrame(config_inner, fg_color="transparent")
-        save_row.pack(fill="x", pady=(10, 0))
+        # Action Buttons
+        act_row = ctk.CTkFrame(inner, fg_color="transparent")
+        act_row.pack(fill="x", pady=(12, 0))
 
         save_btn = ctk.CTkButton(
-            save_row,
-            text="Save & Connect",
+            act_row,
+            text="Save and Bind Device",
             command=self._on_save_device,
-            width=140,
+            width=160,
             height=36,
-            fg_color="#06b6d4",
-            hover_color="#0891b2",
-            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=COLOR_BTN_BG,
+            hover_color=COLOR_BTN_HOVER,
+            text_color=COLOR_TEXT_PRIMARY,
+            border_color=COLOR_BORDER,
+            border_width=1,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            corner_radius=6,
         )
-        save_btn.pack(side="left")
+        save_btn.pack(side="left", padx=(0, 8))
 
-        self.save_status = ctk.CTkLabel(save_row, text="", font=ctk.CTkFont(size=12), text_color="#22c55e")
-        self.save_status.pack(side="left", padx=10)
+        test_btn = ctk.CTkButton(
+            act_row,
+            text="Test Connection",
+            command=self._on_test_connection,
+            width=130,
+            height=36,
+            fg_color=COLOR_BTN_BG,
+            hover_color=COLOR_BTN_HOVER,
+            text_color=COLOR_TEXT_PRIMARY,
+            border_color=COLOR_BORDER,
+            border_width=1,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            corner_radius=6,
+        )
+        test_btn.pack(side="left")
 
-        # Interactive Controls Card
-        control_card = ctk.CTkFrame(self, fg_color="#1e293b", corner_radius=12)
-        control_card.pack(fill="x", padx=20, pady=(0, 20))
+        self.status_feedback = ctk.CTkLabel(act_row, text="", font=ctk.CTkFont(size=12), text_color=COLOR_TEXT_SECONDARY)
+        self.status_feedback.pack(side="left", padx=12)
 
-        control_inner = ctk.CTkFrame(control_card, fg_color="transparent")
-        control_inner.pack(fill="x", padx=20, pady=15)
+        # Section 2: Interactive Lighting Studio Card
+        ctrl_card = ctk.CTkFrame(self, fg_color=COLOR_SURFACE, border_color=COLOR_BORDER, border_width=1, corner_radius=12)
+        ctrl_card.pack(fill="x", padx=28, pady=(0, 24))
+
+        ctrl_inner = ctk.CTkFrame(ctrl_card, fg_color="transparent")
+        ctrl_inner.pack(fill="x", padx=20, pady=18)
 
         ctk.CTkLabel(
-            control_inner,
-            text="Live Bulb Controls",
+            ctrl_inner,
+            text="Live Lighting Controls and Color Presets",
             font=ctk.CTkFont(size=14, weight="bold"),
-        ).pack(anchor="w", pady=(0, 10))
+            text_color=COLOR_TEXT_PRIMARY,
+        ).pack(anchor="w", pady=(0, 12))
 
-        # On / Off buttons
-        power_row = ctk.CTkFrame(control_inner, fg_color="transparent")
-        power_row.pack(fill="x", pady=(0, 15))
+        # Power Toggle Buttons
+        p_row = ctk.CTkFrame(ctrl_inner, fg_color="transparent")
+        p_row.pack(fill="x", pady=(0, 14))
 
         on_btn = ctk.CTkButton(
-            power_row,
-            text="Turn ON",
+            p_row,
+            text="Turn ON Light",
             command=lambda: self.assistant.smart_home.turn_on(),
-            fg_color="#10b981",
-            hover_color="#059669",
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=COLOR_BTN_BG,
+            hover_color=COLOR_BTN_HOVER,
+            text_color=COLOR_TEXT_PRIMARY,
+            border_color=COLOR_BORDER,
+            border_width=1,
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            corner_radius=6,
         )
         on_btn.pack(side="left", fill="x", expand=True, padx=(0, 5))
 
         off_btn = ctk.CTkButton(
-            power_row,
-            text="Turn OFF",
+            p_row,
+            text="Turn OFF Light",
             command=lambda: self.assistant.smart_home.turn_off(),
-            fg_color="#ef4444",
-            hover_color="#dc2626",
-            height=38,
-            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=COLOR_BTN_BG,
+            hover_color=COLOR_BTN_HOVER,
+            text_color=COLOR_TEXT_PRIMARY,
+            border_color=COLOR_BORDER,
+            border_width=1,
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            corner_radius=6,
         )
         off_btn.pack(side="right", fill="x", expand=True, padx=(5, 0))
 
         # Brightness Slider
-        ctk.CTkLabel(control_inner, text="Brightness:").pack(anchor="w", pady=(5, 2))
-        slider_row = ctk.CTkFrame(control_inner, fg_color="transparent")
-        slider_row.pack(fill="x", pady=(0, 15))
+        ctk.CTkLabel(ctrl_inner, text="Brightness Level:", font=ctk.CTkFont(size=12, weight="bold"), text_color=COLOR_TEXT_SECONDARY).pack(anchor="w", pady=(4, 2))
+        slider_row = ctk.CTkFrame(ctrl_inner, fg_color="transparent")
+        slider_row.pack(fill="x", pady=(0, 14))
 
         self.brightness_slider = ctk.CTkSlider(
             slider_row,
@@ -148,69 +262,123 @@ class SmartHomeView(ctk.CTkScrollableFrame):
             to=100,
             number_of_steps=100,
             command=self._on_slider_change,
+            button_color=COLOR_ACCENT,
+            button_hover_color=COLOR_TEXT_PRIMARY,
+            progress_color=COLOR_ACCENT,
         )
         self.brightness_slider.set(100)
         self.brightness_slider.pack(side="left", fill="x", expand=True, padx=(0, 10))
 
-        self.brightness_val_label = ctk.CTkLabel(slider_row, text="100%", width=45)
+        self.brightness_val_label = ctk.CTkLabel(slider_row, text="100%", width=45, font=ctk.CTkFont(size=12, weight="bold"), text_color=COLOR_TEXT_PRIMARY)
         self.brightness_val_label.pack(side="right")
 
-        # Lighting Preset Modes
-        ctk.CTkLabel(control_inner, text="Lighting Modes:").pack(anchor="w", pady=(5, 5))
-        mode_row = ctk.CTkFrame(control_inner, fg_color="transparent")
-        mode_row.pack(fill="x", pady=(0, 15))
+        # Preset Modes
+        ctk.CTkLabel(ctrl_inner, text="Lighting Modes:", font=ctk.CTkFont(size=12, weight="bold"), text_color=COLOR_TEXT_SECONDARY).pack(anchor="w", pady=(4, 6))
+        mode_row = ctk.CTkFrame(ctrl_inner, fg_color="transparent")
+        mode_row.pack(fill="x", pady=(0, 14))
         mode_row.grid_columnconfigure((0, 1, 2, 3, 4), weight=1)
 
-        modes = [
-            ("Focus", "#3b82f6"),
-            ("Movie", "#f59e0b"),
-            ("Gaming", "#8b5cf6"),
-            ("Night", "#64748b"),
-            ("Relax", "#ec4899"),
-        ]
-        for idx, (m_name, color) in enumerate(modes):
+        modes = ["Focus", "Movie", "Gaming", "Night", "Relax"]
+        for idx, m_name in enumerate(modes):
             btn = ctk.CTkButton(
                 mode_row,
                 text=m_name,
-                fg_color=color,
+                fg_color=COLOR_BTN_BG,
+                hover_color=COLOR_BTN_HOVER,
+                text_color=COLOR_TEXT_PRIMARY,
+                border_color=COLOR_BORDER,
+                border_width=1,
                 command=lambda m=m_name: self.assistant.smart_home.set_mode(m),
-                height=34,
+                height=32,
+                corner_radius=6,
+                font=ctk.CTkFont(size=11, weight="bold"),
             )
             btn.grid(row=0, column=idx, padx=3, sticky="nsew")
 
-        # Color Buttons
-        ctk.CTkLabel(control_inner, text="Color Swatches:").pack(anchor="w", pady=(5, 5))
-        color_row = ctk.CTkFrame(control_inner, fg_color="transparent")
-        color_row.pack(fill="x", pady=(0, 5))
+        # Color Swatches
+        ctk.CTkLabel(ctrl_inner, text="Color Presets:", font=ctk.CTkFont(size=12, weight="bold"), text_color=COLOR_TEXT_SECONDARY).pack(anchor="w", pady=(4, 6))
+        color_row = ctk.CTkFrame(ctrl_inner, fg_color="transparent")
+        color_row.pack(fill="x", pady=(0, 4))
         color_row.grid_columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
 
-        colors = [
-            ("Red", "#ef4444"),
-            ("Blue", "#3b82f6"),
-            ("Green", "#22c55e"),
-            ("Cyan", "#06b6d4"),
-            ("Violet", "#8b5cf6"),
-            ("Warm", "#f59e0b"),
-        ]
-        for idx, (c_name, hex_code) in enumerate(colors):
+        colors = ["Red", "Blue", "Green", "Cyan", "Violet", "Warm White"]
+        for idx, c_name in enumerate(colors):
             btn = ctk.CTkButton(
                 color_row,
                 text=c_name,
-                fg_color=hex_code,
+                fg_color=COLOR_BTN_BG,
+                hover_color=COLOR_BTN_HOVER,
+                text_color=COLOR_TEXT_PRIMARY,
+                border_color=COLOR_BORDER,
+                border_width=1,
                 command=lambda c=c_name: self.assistant.smart_home.set_color(c),
-                height=32,
+                height=30,
+                corner_radius=6,
+                font=ctk.CTkFont(size=11),
             )
             btn.grid(row=0, column=idx, padx=3, sticky="nsew")
+
+    def _on_scan_network(self) -> None:
+        self.scan_btn.configure(text="Scanning...", state="disabled")
+        self.status_feedback.configure(text="Scanning local LAN for smart devices...", text_color=COLOR_TEXT_SECONDARY)
+
+        def _worker():
+            devs = self.assistant.smart_home.scan_network_devices()
+            self.discovered_devices = devs
+
+            def _update():
+                if not self.winfo_exists():
+                    return
+                self.scan_btn.configure(text="Scan Network", state="normal")
+                if devs:
+                    options = [f"{d['ip']} - {d['alias']} ({d.get('model', 'Tapo')})" for d in devs]
+                    self.device_picker.configure(values=options)
+                    self.device_picker.set(options[0])
+                    self._on_device_picked(options[0])
+                    self.status_feedback.configure(text=f"Found {len(devs)} smart device(s).", text_color=COLOR_TEXT_PRIMARY)
+                else:
+                    self.status_feedback.configure(text="No devices found via broadcast. Enter IP manually.", text_color=COLOR_TEXT_SECONDARY)
+
+            self.after(0, _update)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_device_picked(self, choice: str) -> None:
+        ip = choice.split(" ")[0].strip()
+        self.ip_entry.delete(0, "end")
+        self.ip_entry.insert(0, ip)
+
+    def _on_save_device(self) -> None:
+        self.assistant.config.smart_bulb_ip = self.ip_entry.get().strip()
+        selected_family_display = self.family_var.get()
+        self.assistant.config.smart_bulb_family = DEVICE_FAMILIES.get(selected_family_display, "SMART.TAPOBULB")
+        self.assistant.config.tapo_email = self.email_entry.get().strip()
+        self.assistant.config.tapo_password = self.pass_entry.get().strip()
+
+        save_config(self.assistant.config)
+        self.assistant.reload_config(self.assistant.config)
+        self.status_feedback.configure(text="Device parameters saved. Reconnecting...", text_color=COLOR_TEXT_SECONDARY)
+
+    def _on_test_connection(self) -> None:
+        self._on_save_device()
+        self.status_feedback.configure(text="Testing connection...", text_color=COLOR_TEXT_SECONDARY)
+
+        def _test_worker():
+            success = self.assistant.smart_home.turn_on()
+
+            def _update():
+                if not self.winfo_exists():
+                    return
+                if success:
+                    self.status_feedback.configure(text="Connected and light turned ON.", text_color=COLOR_TEXT_PRIMARY)
+                else:
+                    self.status_feedback.configure(text="Connection failed. Check IP and Tapo credentials.", text_color="#E08080")
+
+            self.after(0, _update)
+
+        threading.Thread(target=_test_worker, daemon=True).start()
 
     def _on_slider_change(self, val: float) -> None:
         int_val = int(val)
         self.brightness_val_label.configure(text=f"{int_val}%")
         self.assistant.smart_home.set_brightness(int_val)
-
-    def _on_save_device(self) -> None:
-        self.assistant.config.smart_bulb_ip = self.ip_entry.get().strip()
-        self.assistant.config.tapo_email = self.email_entry.get().strip()
-        self.assistant.config.tapo_password = self.pass_entry.get().strip()
-        save_config(self.assistant.config)
-        self.assistant.reload_config(self.assistant.config)
-        self.save_status.configure(text="✓ Device settings saved! Reconnecting...")

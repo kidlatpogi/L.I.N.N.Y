@@ -45,7 +45,8 @@ class LinnyConfig:
 
     # Smart Home (Kasa / Tapo L530E)
     smart_bulb_enabled: bool = True
-    smart_bulb_ip: str = "192.168.1.100"
+    smart_bulb_ip: str = "192.168.18.12"
+    smart_bulb_family: str = "SMART.TAPOBULB"
     tapo_email: str = ""
     tapo_password: str = ""
 
@@ -74,7 +75,8 @@ class LinnyConfig:
         "lol": "E:\\GAMES\\Riot Games\\Riot Client\\RiotClientServices.exe --launch-product=league_of_legends --launch-patchline=live",
     })
 
-    # Weather Location (Anahaw 2, Silang, Cavite)
+    # Weather Location
+    weather_city: str = "Silang, Cavite"
     weather_latitude: float = 14.2167
     weather_longitude: float = 120.9833
 

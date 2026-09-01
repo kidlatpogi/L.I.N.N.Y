@@ -58,6 +58,7 @@ class LinnyAssistant:
             latitude=self.config.weather_latitude,
             longitude=self.config.weather_longitude,
             timezone=self.config.timezone,
+            city_name=self.config.weather_city,
         )
         self.launcher = AppLauncher(self.config.app_aliases)
         self.power = SystemPowerManager(self.config.screenshot_folder)
@@ -83,6 +84,7 @@ class LinnyAssistant:
             new_config.weather_latitude,
             new_config.weather_longitude,
             new_config.timezone,
+            city=new_config.weather_city,
         )
         self.launcher.update_aliases(new_config.app_aliases)
         self.power.screenshot_dir = new_config.screenshot_folder
